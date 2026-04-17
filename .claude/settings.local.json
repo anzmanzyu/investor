@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install:*)",
+      "Bash(python3 -m pip install yfinance pandas numpy requests tabulate python-dotenv --quiet)",
+      "Bash(py --version)",
+      "Bash(python3 -c \"import sys; print\\(sys.version\\)\")",
+      "Bash(py -3 --version)",
+      "WebFetch(domain:www.jpx.co.jp)",
+      "WebSearch"
+    ]
+  }
+}
