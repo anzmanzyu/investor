@@ -111,7 +111,7 @@ def is_market_ok(asof_date: str = None, market_df: pd.DataFrame = None) -> tuple
     close      = float(latest["Close"])
     ma25       = float(latest["ma25"])      if not pd.isna(latest["ma25"])      else 0
     ma25_slope = float(latest["ma25_slope"]) if not pd.isna(latest["ma25_slope"]) else 0
-    ma75       = float(latest["ma75"])      if not pd.isna(latest["ma75"])      else 0
+    ma75       = float(latest["ma75"])      if "ma75" in df.columns and not pd.isna(latest["ma75"]) else 0
 
     reasons = []
 
