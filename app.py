@@ -210,6 +210,32 @@ def render_candidate_card(rank: int, c: dict):
         if plan["pos_note"]:
             st.error(plan["pos_note"])
 
+        # ── ポジション追加ボタン ──────────────────────────
+        st.markdown("---")
+        col_btn, col_msg = st.columns([2, 3])
+        with col_btn:
+            if st.button(
+                f"📝 ポジションに追加する",
+                key=f"add_pos_{c['symbol']}_{rank}",
+                type="primary",
+                use_container_width=True,
+            ):
+                import portfolio as pf_module
+                pf_module.add_position(
+                    entry_date  = date.today().strftime("%Y-%m-%d"),
+                    symbol      = c["symbol"],
+                    name        = c["name"],
+                    entry_price = plan["entry"],
+                    shares      = plan["shares"],
+                    stop        = plan["stop"],
+                    tp          = plan["tp_fixed"],
+                    memo        = f"スコア{c['score']}点 / " + c["reasons"][0] if c["reasons"] else "",
+                )
+                st.success(f"✅ {c['name']} をポートフォリオに追加しました！ → 💼ポートフォリオタブで確認できます")
+        with col_msg:
+            if c["warnings"]:
+                st.caption(f"⚠️ 注意: {c['warnings'][0]}")
+
 
 # ─── サマリーテーブル表示 ────────────────────────────────────
 def render_summary_table(candidates: list[dict]):
