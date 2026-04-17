@@ -16,9 +16,11 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 # ─── 設定 ──────────────────────────────────────────────
-# TOPIXのyfinanceティッカー
-# ^TPX が使えない場合は 1306.T（TOPIX連動ETF）を使う
-MARKET_TICKERS = ["^TPX", "1306.T"]
+# 市場指数のyfinanceティッカー（上から順に試す）
+# ^N225 = 日経225（最も安定して取得できる）
+# ^TPX  = TOPIX（取得できない場合が多い）
+# 1306.T = NEXT FUNDS TOPIX ETF（最終フォールバック）
+MARKET_TICKERS = ["^N225", "1306.T"]
 
 # 地合い判定に使う移動平均期間
 MARKET_MA_SHORT = 25
