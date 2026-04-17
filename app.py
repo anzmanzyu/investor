@@ -91,90 +91,103 @@ st.markdown("""
 # ─── サイドバー（設定パネル）────────────────────────────────
 def render_sidebar() -> dict:
     st.sidebar.title("⚙️ 設定")
-    st.sidebar.caption("ここを変えると計算結果が変わります。最初はそのままでOKです。")
+    st.sidebar.caption("最初はそのままでOKです。慣れてきたら少しずつ調整してみましょう。")
+    st.sidebar.markdown("---")
 
-    # ── 資金管理 ───────────────────────────────────────────
-    st.sidebar.subheader("💰 資金管理")
-    st.sidebar.caption("「何円持っていて、1回いくらまで損していいか」を設定します。")
-
+    # ── STEP 1: 資金 ────────────────────────────────────────
+    st.sidebar.markdown("### 💰 STEP 1｜用意する資金")
     capital = st.sidebar.number_input(
-        "総資金（円）",
+        "株に使う金額（円）",
         value=config.TOTAL_CAPITAL,
         step=100_000, min_value=10_000, format="%d",
-        help="株に使える資金の合計。これをもとに「何株買えるか」を自動計算します。"
-    )
-    risk = st.sidebar.slider(
-        "1回の許容損失（総資金の何%まで損していいか）",
-        0.5, 2.0, config.RISK_PERCENT, step=0.1,
-        help=(
-            "1回のトレードで最大いくら損してもいいかの割合です。\n"
-            f"例：総資金{capital:,}円 × 1% = {capital*0.01:,.0f}円まで\n"
-            "0.5〜1%が安全な目安です。欲張って大きくしないことが大切。"
-        )
-    )
-    st.sidebar.info(f"👉 1回の最大損失額：**{capital * risk / 100:,.0f}円**")
-
-    # ── 損切り・利確 ────────────────────────────────────────
-    st.sidebar.subheader("🎯 損切り・利確の目安")
-    st.sidebar.caption("損切り＝「これ以上損したら諦める価格」、利確＝「ここで利益を受け取る価格」です。")
-
-    stop_pct = st.sidebar.slider(
-        "損切り幅（買値から何%下がったら売るか）",
-        2.0, 10.0, config.STOP_LOSS_PERCENT, step=0.5,
-        help=(
-            "例：3%に設定 → 1,000円で買ったら970円で損切り\n"
-            "小さいほど損失を抑えられますが、少しの値動きで売れてしまいます。\n"
-            "3〜5%が一般的な目安です。"
-        )
-    )
-    tp_pct = st.sidebar.slider(
-        "利確幅（買値から何%上がったら売るか）",
-        4.0, 20.0, config.TAKE_PROFIT_PERCENT, step=0.5,
-        help=(
-            "例：5%に設定 → 1,000円で買ったら1,050円で利確\n"
-            "損切り幅の2倍以上が理想です（リスクより利益を大きく）。"
-        )
-    )
-    st.sidebar.caption(f"損切り{stop_pct}% → 利確{tp_pct}%（利益が損失の{tp_pct/stop_pct:.1f}倍）")
-
-    # ── スクリーニング条件 ──────────────────────────────────
-    st.sidebar.subheader("🔍 銘柄の絞り込み条件")
-    st.sidebar.caption("どんな銘柄を候補に出すかの基準です。厳しくすると候補が減ります。")
-
-    vol_ratio_min = st.sidebar.slider(
-        "出来高の急増倍率（普段より何倍以上売買されているか）",
-        1.0, 3.0, config.VOLUME_RATIO_MIN, step=0.1,
-        help=(
-            "出来高＝その日に売買された株の数。\n"
-            "普段より多く売買されている銘柄は注目されているサインです。\n"
-            "1.5倍 → 普段の1.5倍以上売買された銘柄のみ表示。"
-        )
-    )
-    min_price = st.sidebar.number_input(
-        "最低株価（円）",
-        value=config.MIN_PRICE, step=100, min_value=0,
-        help=(
-            "これより安い株は候補から除外します。\n"
-            "あまりにも安い株（低位株）は値動きが荒く扱いにくいためです。"
-        )
-    )
-    max_candidates = st.sidebar.slider(
-        "表示する候補の最大数",
-        3, 20, config.MAX_CANDIDATES,
-        help="スコアが高い順に、この数だけ候補を表示します。"
-    )
-
-    # ── 対象市場 ────────────────────────────────────────────
-    st.sidebar.subheader("🌍 対象市場")
-    market = st.sidebar.radio(
-        "どちらの株を対象にしますか？",
-        ["🇯🇵 JP（日本株）", "🇺🇸 US（米国株）"],
-        index=0 if config.MARKET == "JP" else 1,
-        help="日本株は東証（東京証券取引所）の銘柄、米国株はNYSEやNASDAQの銘柄が対象です。"
     )
 
     st.sidebar.markdown("---")
-    st.sidebar.caption("💡 設定を変えたらスクリーニングを再実行してください。")
+
+    # ── STEP 2: 1回の損失上限 ──────────────────────────────
+    st.sidebar.markdown("### 🛡️ STEP 2｜1回でいくらまで損していい？")
+    st.sidebar.caption("「これ以上損したら売る」金額のルールです。小さいほど安全です。")
+
+    risk_yen = st.sidebar.select_slider(
+        "1回の最大損失額",
+        options=[1000, 2000, 3000, 5000, 10000, 15000, 20000],
+        value=int(capital * config.RISK_PERCENT / 100),
+        format_func=lambda x: f"{x:,}円"
+    )
+    risk = risk_yen / capital * 100
+
+    st.sidebar.success(f"💡 総資金 {capital:,}円 の **{risk:.1f}%** が上限")
+    st.sidebar.caption("一般的には総資金の0.5〜1%が安全な目安です。")
+
+    st.sidebar.markdown("---")
+
+    # ── STEP 3: 売るタイミング ──────────────────────────────
+    st.sidebar.markdown("### 📉📈 STEP 3｜売るタイミング")
+
+    col_s, col_t = st.sidebar.columns(2)
+    with col_s:
+        st.markdown("**🔴 損切り**\n\n下がったら売る")
+        stop_pct = st.select_slider(
+            "下落幅",
+            options=[2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0, 8.0, 10.0],
+            value=config.STOP_LOSS_PERCENT,
+            format_func=lambda x: f"-{x}%",
+            key="stop_slider"
+        )
+    with col_t:
+        st.markdown("**🟢 利確**\n\n上がったら売る")
+        tp_pct = st.select_slider(
+            "上昇幅",
+            options=[4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0, 15.0, 20.0],
+            value=config.TAKE_PROFIT_PERCENT,
+            format_func=lambda x: f"+{x}%",
+            key="tp_slider"
+        )
+
+    # 具体例を表示
+    example_price = 1000
+    stop_ex = int(example_price * (1 - stop_pct / 100))
+    tp_ex   = int(example_price * (1 + tp_pct   / 100))
+    rr      = tp_pct / stop_pct
+
+    st.sidebar.markdown(f"""
+**📌 例：1,000円の株を買った場合**
+- 🔴 {stop_ex}円 を下回ったら売る（損切り）
+- 🟢 {tp_ex}円 を超えたら売る（利確）
+- 利益は損失の **{rr:.1f}倍** を狙う設定
+""")
+
+    if rr < 1.5:
+        st.sidebar.warning("⚠️ 利確幅が損切り幅に近すぎます。利確を広げるか損切りを狭めましょう。")
+
+    st.sidebar.markdown("---")
+
+    # ── 詳細設定（折りたたみ）──────────────────────────────
+    with st.sidebar.expander("🔧 詳細設定（上級者向け）"):
+        st.caption("通常はそのままでOKです。")
+        market_raw = st.radio(
+            "対象市場",
+            ["🇯🇵 日本株", "🇺🇸 米国株"],
+            index=0 if config.MARKET == "JP" else 1,
+        )
+        vol_ratio_min = st.slider(
+            "出来高の急増倍率（普段より何倍以上か）",
+            1.0, 3.0, config.VOLUME_RATIO_MIN, step=0.1,
+            help="普段より多く売買されている銘柄だけを表示します。1.5倍＝普段の1.5倍以上。"
+        )
+        min_price = st.number_input(
+            "最低株価（円以下は除外）",
+            value=config.MIN_PRICE, step=100, min_value=0,
+            help="あまりにも安い株は値動きが荒いため除外します。"
+        )
+        max_candidates = st.slider(
+            "表示する候補数",
+            3, 20, config.MAX_CANDIDATES,
+            help="スコアが高い順に表示する銘柄数。"
+        )
+
+    st.sidebar.markdown("---")
+    st.sidebar.caption("💡 設定を変えたら「スクリーニング実行」を押し直してください。")
 
     return {
         "capital"       : capital,
@@ -184,7 +197,7 @@ def render_sidebar() -> dict:
         "max_candidates": max_candidates,
         "stop_pct"      : stop_pct,
         "tp_pct"        : tp_pct,
-        "market"        : "JP" if "JP" in market else "US",
+        "market"        : "JP" if "日本" in market_raw else "US",
     }
 
 
