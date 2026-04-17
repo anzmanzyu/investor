@@ -29,21 +29,61 @@ import calculator
 import history as history_module
 
 
-# ─── CSS（スマホ対応・ダークテーマ調整）────────────────────
+# ─── CSS（スマホ対応・レスポンシブ）────────────────────────
 st.markdown("""
 <style>
-    .metric-card {
-        background: #1e2130;
-        border-radius: 8px;
-        padding: 12px 16px;
-        margin: 4px 0;
-    }
+    /* 共通 */
     .pass-badge  { color: #00c853; font-weight: bold; }
     .warn-badge  { color: #ffab00; font-weight: bold; }
     .score-high  { color: #00c853; }
     .score-mid   { color: #ffab00; }
     .score-low   { color: #ff5252; }
     .stProgress > div > div { background: #00c853; }
+
+    /* スマホ対応（画面幅600px以下） */
+    @media (max-width: 600px) {
+        /* タイトルを小さく */
+        h1 { font-size: 1.4rem !important; }
+        h2 { font-size: 1.2rem !important; }
+        h3 { font-size: 1.0rem !important; }
+
+        /* カラムを縦積みに */
+        [data-testid="column"] {
+            width: 100% !important;
+            flex: 1 1 100% !important;
+            min-width: 100% !important;
+        }
+
+        /* メトリクスを小さく */
+        [data-testid="stMetricValue"] {
+            font-size: 1.1rem !important;
+        }
+        [data-testid="stMetricLabel"] {
+            font-size: 0.75rem !important;
+        }
+
+        /* ボタンを大きく（タップしやすく） */
+        .stButton > button {
+            height: 3rem !important;
+            font-size: 1rem !important;
+        }
+
+        /* サイドバーを非表示にしてメインを広く */
+        [data-testid="stSidebar"] {
+            min-width: 0 !important;
+        }
+
+        /* タブ文字を小さく */
+        .stTabs [data-baseweb="tab"] {
+            font-size: 0.75rem !important;
+            padding: 6px 8px !important;
+        }
+
+        /* テーブルをスクロール可能に */
+        [data-testid="stDataFrame"] {
+            overflow-x: auto !important;
+        }
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -332,35 +372,52 @@ def main():
         "🔍 スクリーニング", "💼 ポートフォリオ", "📊 バックテスト", "📚 履歴", "❓ 使い方"
     ])
 
+    # ─── セッション状態の初期化 ──────────────────────────
+    if "candidates" not in st.session_state:
+        st.session_state["candidates"] = []
+    if "screen_date" not in st.session_state:
+        st.session_state["screen_date"] = ""
+    if "market_status" not in st.session_state:
+        st.session_state["market_status"] = None
+
     # ─── スクリーニングタブ ──────────────────────────────
     with tab_screen:
-        col_run, col_info = st.columns([2, 3])
 
-        with col_run:
-            st.markdown(f"""
+        # 地合いステータス（キャッシュして再取得を減らす）
+        if st.session_state["market_status"] is None:
+            with st.spinner("地合い確認中..."):
+                from market_filter import get_market_status
+                st.session_state["market_status"] = get_market_status()
+        mkt = st.session_state["market_status"]
+
+        if mkt["ok"]:
+            st.success(f"🟢 {mkt['message']}")
+        else:
+            st.error(f"🔴 {mkt['message']}  ← 本日は見送り推奨")
+
+        st.markdown(f"""
 **対象市場**: {cfg['market']}
 **総資金**: {cfg['capital']:,}円
 **許容損失**: {cfg['risk']}%（最大損失 {cfg['capital'] * cfg['risk'] / 100:,.0f}円/トレード）
 """)
-            run_button = st.button("▶ スクリーニング実行", type="primary", use_container_width=True)
 
-        with col_info:
-            # 地合いステータス表示
-            with st.spinner("地合い確認中..."):
-                from market_filter import get_market_status
-                mkt = get_market_status()
-            if mkt["ok"]:
-                st.success(f"🟢 {mkt['message']}")
-            else:
-                st.error(f"🔴 {mkt['message']}  ← 本日は見送り推奨")
-            st.caption("引け後（15:30以降）に実行するのが最適です。")
+        col_run, col_clear = st.columns([3, 1])
+        with col_run:
+            run_button = st.button("▶ スクリーニング実行", type="primary", use_container_width=True)
+        with col_clear:
+            if st.button("🗑 結果をクリア", use_container_width=True):
+                st.session_state["candidates"] = []
+                st.session_state["screen_date"] = ""
+                st.session_state["market_status"] = None
+                st.rerun()
+
+        st.caption("引け後（15:30以降）に実行するのが最適です。")
 
         if run_button:
             symbols = data_fetcher.load_watchlist()
             st.markdown(f"**対象銘柄数: {len(symbols)}銘柄**")
 
-            with st.spinner("データ取得中..."):
-                raw_results = run_screening_with_progress(symbols)
+            raw_results = run_screening_with_progress(symbols)
 
             if not raw_results:
                 st.warning(
@@ -370,18 +427,25 @@ def main():
                     "- watchlist.txtの銘柄数が少ない\n"
                     "- スクリーニング条件が厳しすぎる（左サイドバーで調整）"
                 )
-                return
+            else:
+                # トレードプランを計算してセッションに保存
+                candidates = []
+                for r in raw_results:
+                    r["plan"] = calculator.build_trade_plan(r)
+                    candidates.append(r)
 
-            # トレードプランを計算
-            candidates = []
-            for r in raw_results:
-                r["plan"] = calculator.build_trade_plan(r)
-                candidates.append(r)
+                run_date = date.today().strftime("%Y-%m-%d")
+                st.session_state["candidates"]  = candidates
+                st.session_state["screen_date"] = run_date
 
-            # 履歴保存
-            run_date = date.today().strftime("%Y-%m-%d")
-            history_module.save_history(candidates, run_date)
+                # 履歴保存
+                history_module.save_history(candidates, run_date)
 
+        # ── 結果表示（セッションから読み込む）──────────────
+        candidates = st.session_state["candidates"]
+        run_date   = st.session_state["screen_date"]
+
+        if candidates:
             # 結果表示
             st.success(f"✅ {len(candidates)}銘柄が条件を通過しました")
             st.markdown("---")
