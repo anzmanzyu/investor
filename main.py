@@ -65,6 +65,19 @@ def main():
     print(f"  市場: {config.MARKET}  総資金: {config.TOTAL_CAPITAL:,}円  許容損失: {config.RISK_PERCENT}%")
     print(f"{'='*60}\n")
 
+    # 地合いチェック
+    from market_filter import is_market_ok
+    ok, reason = is_market_ok()
+    print(f"[地合い] {reason}")
+    if not ok:
+        print("[WARNING] 地合いNGのため、本日は見送りを推奨します。")
+        print("          続行する場合は何かキーを押してください（Ctrl+Cで中止）")
+        try:
+            input()
+        except KeyboardInterrupt:
+            print("中止しました。")
+            return
+
     # 銘柄リスト読み込み
     symbols = data_fetcher.load_watchlist()
     print(f"[INFO] 対象銘柄数: {len(symbols)}銘柄\n")

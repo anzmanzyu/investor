@@ -317,10 +317,15 @@ def main():
             run_button = st.button("▶ スクリーニング実行", type="primary", use_container_width=True)
 
         with col_info:
-            st.info(
-                "引け後（15:30以降）に実行するのが最適です。\n"
-                "翌営業日の監視候補銘柄を抽出します。"
-            )
+            # 地合いステータス表示
+            with st.spinner("地合い確認中..."):
+                from market_filter import get_market_status
+                mkt = get_market_status()
+            if mkt["ok"]:
+                st.success(f"🟢 {mkt['message']}")
+            else:
+                st.error(f"🔴 {mkt['message']}  ← 本日は見送り推奨")
+            st.caption("引け後（15:30以降）に実行するのが最適です。")
 
         if run_button:
             symbols = data_fetcher.load_watchlist()
