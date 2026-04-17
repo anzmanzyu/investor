@@ -1,6 +1,7 @@
 .env
 data/output/
 data/history.csv
+data/positions.csv
 __pycache__/
 *.pyc
 .venv/
