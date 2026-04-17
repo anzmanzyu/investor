@@ -239,7 +239,7 @@ def render_summary_table(candidates: list[dict]):
         return "color: #ff5252"
 
     st.dataframe(
-        df.style.applymap(color_score, subset=["スコア"]),
+        df.style.map(color_score, subset=["スコア"]),
         use_container_width=True,
         hide_index=True,
     )
