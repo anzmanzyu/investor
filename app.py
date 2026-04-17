@@ -302,7 +302,7 @@ def main():
     apply_settings(cfg)
 
     # タブ
-    tab_screen, tab_history, tab_help = st.tabs(["🔍 スクリーニング", "📚 履歴", "❓ 使い方"])
+    tab_screen, tab_backtest, tab_history, tab_help = st.tabs(["🔍 スクリーニング", "📊 バックテスト", "📚 履歴", "❓ 使い方"])
 
     # ─── スクリーニングタブ ──────────────────────────────
     with tab_screen:
@@ -365,6 +365,115 @@ def main():
             st.subheader("📄 詳細")
             for rank, c in enumerate(candidates, 1):
                 render_candidate_card(rank, c)
+
+    # ─── バックテストタブ ─────────────────────────────────
+    with tab_backtest:
+        st.subheader("📊 バックテスト（過去シミュレーション）")
+        st.caption("「もし実際に入っていたら」の損益をシミュレーションします。結果はあくまで参考値です。")
+
+        col_s, col_e, col_n = st.columns(3)
+        with col_s:
+            bt_start = st.date_input("開始日", value=pd.Timestamp("2025-01-01"))
+        with col_e:
+            bt_end   = st.date_input("終了日",  value=pd.Timestamp("2025-12-31"))
+        with col_n:
+            bt_top   = st.slider("対象銘柄数（watchlist上位）", 20, 200, 50, step=10)
+
+        st.info(f"⏱ 銘柄数×期間に応じて数分〜数十分かかります。実行中はタブを切り替えないでください。")
+        bt_button = st.button("▶ バックテスト実行", type="secondary", use_container_width=True)
+
+        if bt_button:
+            from backtest import run_backtest, print_summary
+            from market_filter import fetch_market_data_range
+
+            symbols = data_fetcher.load_watchlist()[:bt_top]
+            start_str = bt_start.strftime("%Y-%m-%d")
+            end_str   = bt_end.strftime("%Y-%m-%d")
+
+            with st.spinner(f"{len(symbols)}銘柄 × {start_str}〜{end_str} でシミュレーション中..."):
+                trades_df, equity_df = run_backtest(symbols, start_str, end_str)
+
+            if trades_df.empty:
+                st.warning("期間内にトレードがありませんでした。条件を変えて再実行してください。")
+            else:
+                total   = len(trades_df)
+                wins    = (trades_df["損益合計"] > 0).sum()
+                losses  = (trades_df["損益合計"] <= 0).sum()
+                win_rate = wins / total * 100
+                total_pnl = trades_df["損益合計"].sum()
+                init_cap  = config.TOTAL_CAPITAL
+                ret_pct   = total_pnl / init_cap * 100
+                avg_win   = trades_df[trades_df["損益合計"] > 0]["損益合計"].mean() if wins > 0 else 0
+                avg_loss  = trades_df[trades_df["損益合計"] <= 0]["損益合計"].mean() if losses > 0 else 0
+                pf = abs(trades_df[trades_df["損益合計"] > 0]["損益合計"].sum() /
+                         trades_df[trades_df["損益合計"] <= 0]["損益合計"].sum()) if losses > 0 else 999
+
+                # ── サマリー指標 ──────────────────────────────
+                st.markdown("### 📋 結果サマリー")
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("総トレード数", f"{total}件")
+                c2.metric("勝率", f"{win_rate:.1f}%")
+                c3.metric("プロフィットF", f"{pf:.2f}")
+                c4.metric("総損益", f"{total_pnl:+,.0f}円", delta=f"{ret_pct:+.1f}%")
+
+                c5, c6, c7, c8 = st.columns(4)
+                c5.metric("初期資金", f"{init_cap:,.0f}円")
+                c6.metric("最終資金", f"{init_cap + total_pnl:,.0f}円")
+                c7.metric("平均利益", f"+{avg_win:,.0f}円")
+                c8.metric("平均損失", f"{avg_loss:,.0f}円")
+
+                # ── 決済理由 ──────────────────────────────────
+                st.markdown("### 🔖 決済理由の内訳")
+                reason_df = trades_df.groupby("決済理由").agg(
+                    件数=("損益合計", "count"),
+                    平均損益=("損益合計", "mean"),
+                    合計損益=("損益合計", "sum"),
+                ).reset_index()
+                reason_df["平均損益"] = reason_df["平均損益"].map(lambda x: f"{x:+,.0f}円")
+                reason_df["合計損益"] = reason_df["合計損益"].map(lambda x: f"{x:+,.0f}円")
+                st.dataframe(reason_df, use_container_width=True, hide_index=True)
+
+                # ── 銘柄別損益 ────────────────────────────────
+                st.markdown("### 🏆 銘柄別損益ランキング")
+                sym_df = (
+                    trades_df.groupby(["銘柄コード", "銘柄名"])["損益合計"]
+                    .sum()
+                    .reset_index()
+                    .sort_values("損益合計", ascending=False)
+                )
+                sym_df["損益合計"] = sym_df["損益合計"].map(lambda x: f"{x:+,.0f}円")
+                st.dataframe(sym_df.head(15), use_container_width=True, hide_index=True)
+
+                # ── トレード一覧 ──────────────────────────────
+                st.markdown("### 📄 全トレード一覧")
+                display = trades_df[[
+                    "エントリー日", "銘柄コード", "銘柄名",
+                    "エントリー価格", "決済日", "決済理由", "損益率%", "損益合計"
+                ]].copy()
+                display["損益合計"] = display["損益合計"].map(lambda x: f"{x:+,.0f}円")
+
+                def color_pnl(val):
+                    try:
+                        v = float(str(val).replace(",", "").replace("円", "").replace("+", ""))
+                        return "color: #00c853" if v > 0 else "color: #ff5252"
+                    except Exception:
+                        return ""
+
+                st.dataframe(
+                    display.style.map(color_pnl, subset=["損益合計"]),
+                    use_container_width=True, hide_index=True
+                )
+
+                # ── CSVダウンロード ───────────────────────────
+                csv = trades_df.to_csv(index=False, encoding="utf-8-sig")
+                st.download_button(
+                    "📥 バックテスト結果をCSVダウンロード",
+                    csv.encode("utf-8-sig"),
+                    f"backtest_{start_str}_{end_str}.csv",
+                    "text/csv"
+                )
+
+                st.warning("⚠️ バックテストは過去データによる参考値です。将来の利益を保証するものではありません。")
 
     # ─── 履歴タブ ────────────────────────────────────────
     with tab_history:
