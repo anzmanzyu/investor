@@ -91,34 +91,90 @@ st.markdown("""
 # ─── サイドバー（設定パネル）────────────────────────────────
 def render_sidebar() -> dict:
     st.sidebar.title("⚙️ 設定")
+    st.sidebar.caption("ここを変えると計算結果が変わります。最初はそのままでOKです。")
 
+    # ── 資金管理 ───────────────────────────────────────────
     st.sidebar.subheader("💰 資金管理")
+    st.sidebar.caption("「何円持っていて、1回いくらまで損していいか」を設定します。")
+
     capital = st.sidebar.number_input(
-        "総資金（円）", value=config.TOTAL_CAPITAL,
-        step=100_000, min_value=10_000, format="%d"
+        "総資金（円）",
+        value=config.TOTAL_CAPITAL,
+        step=100_000, min_value=10_000, format="%d",
+        help="株に使える資金の合計。これをもとに「何株買えるか」を自動計算します。"
     )
     risk = st.sidebar.slider(
-        "1トレード許容損失（%）", 0.5, 2.0, config.RISK_PERCENT, step=0.1
+        "1回の許容損失（総資金の何%まで損していいか）",
+        0.5, 2.0, config.RISK_PERCENT, step=0.1,
+        help=(
+            "1回のトレードで最大いくら損してもいいかの割合です。\n"
+            f"例：総資金{capital:,}円 × 1% = {capital*0.01:,.0f}円まで\n"
+            "0.5〜1%が安全な目安です。欲張って大きくしないことが大切。"
+        )
     )
+    st.sidebar.info(f"👉 1回の最大損失額：**{capital * risk / 100:,.0f}円**")
 
-    st.sidebar.subheader("📊 スクリーニング条件")
+    # ── 損切り・利確 ────────────────────────────────────────
+    st.sidebar.subheader("🎯 損切り・利確の目安")
+    st.sidebar.caption("損切り＝「これ以上損したら諦める価格」、利確＝「ここで利益を受け取る価格」です。")
+
+    stop_pct = st.sidebar.slider(
+        "損切り幅（買値から何%下がったら売るか）",
+        2.0, 10.0, config.STOP_LOSS_PERCENT, step=0.5,
+        help=(
+            "例：3%に設定 → 1,000円で買ったら970円で損切り\n"
+            "小さいほど損失を抑えられますが、少しの値動きで売れてしまいます。\n"
+            "3〜5%が一般的な目安です。"
+        )
+    )
+    tp_pct = st.sidebar.slider(
+        "利確幅（買値から何%上がったら売るか）",
+        4.0, 20.0, config.TAKE_PROFIT_PERCENT, step=0.5,
+        help=(
+            "例：5%に設定 → 1,000円で買ったら1,050円で利確\n"
+            "損切り幅の2倍以上が理想です（リスクより利益を大きく）。"
+        )
+    )
+    st.sidebar.caption(f"損切り{stop_pct}% → 利確{tp_pct}%（利益が損失の{tp_pct/stop_pct:.1f}倍）")
+
+    # ── スクリーニング条件 ──────────────────────────────────
+    st.sidebar.subheader("🔍 銘柄の絞り込み条件")
+    st.sidebar.caption("どんな銘柄を候補に出すかの基準です。厳しくすると候補が減ります。")
+
     vol_ratio_min = st.sidebar.slider(
-        "最低出来高倍率（20日平均比）", 1.0, 3.0, config.VOLUME_RATIO_MIN, step=0.1
+        "出来高の急増倍率（普段より何倍以上売買されているか）",
+        1.0, 3.0, config.VOLUME_RATIO_MIN, step=0.1,
+        help=(
+            "出来高＝その日に売買された株の数。\n"
+            "普段より多く売買されている銘柄は注目されているサインです。\n"
+            "1.5倍 → 普段の1.5倍以上売買された銘柄のみ表示。"
+        )
     )
     min_price = st.sidebar.number_input(
-        "最低株価（円）", value=config.MIN_PRICE, step=100, min_value=0
+        "最低株価（円）",
+        value=config.MIN_PRICE, step=100, min_value=0,
+        help=(
+            "これより安い株は候補から除外します。\n"
+            "あまりにも安い株（低位株）は値動きが荒く扱いにくいためです。"
+        )
     )
     max_candidates = st.sidebar.slider(
-        "最大候補数", 3, 20, config.MAX_CANDIDATES
+        "表示する候補の最大数",
+        3, 20, config.MAX_CANDIDATES,
+        help="スコアが高い順に、この数だけ候補を表示します。"
     )
 
-    st.sidebar.subheader("🎯 損切り・利確")
-    stop_pct = st.sidebar.slider("損切り幅（%）", 2.0, 10.0, config.STOP_LOSS_PERCENT, step=0.5)
-    tp_pct   = st.sidebar.slider("利確幅（%）",   4.0, 20.0, config.TAKE_PROFIT_PERCENT, step=0.5)
-
+    # ── 対象市場 ────────────────────────────────────────────
     st.sidebar.subheader("🌍 対象市場")
-    market = st.sidebar.radio("市場", ["JP（日本株）", "US（米国株）"],
-                               index=0 if config.MARKET == "JP" else 1)
+    market = st.sidebar.radio(
+        "どちらの株を対象にしますか？",
+        ["🇯🇵 JP（日本株）", "🇺🇸 US（米国株）"],
+        index=0 if config.MARKET == "JP" else 1,
+        help="日本株は東証（東京証券取引所）の銘柄、米国株はNYSEやNASDAQの銘柄が対象です。"
+    )
+
+    st.sidebar.markdown("---")
+    st.sidebar.caption("💡 設定を変えたらスクリーニングを再実行してください。")
 
     return {
         "capital"       : capital,
@@ -128,7 +184,7 @@ def render_sidebar() -> dict:
         "max_candidates": max_candidates,
         "stop_pct"      : stop_pct,
         "tp_pct"        : tp_pct,
-        "market"        : "JP" if market.startswith("JP") else "US",
+        "market"        : "JP" if "JP" in market else "US",
     }
 
 
@@ -207,11 +263,28 @@ def render_candidate_card(rank: int, c: dict):
         expanded=(rank <= 3),
     ):
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("エントリー候補", f"{plan['entry']:,.0f}円")
-        col2.metric("損切り候補",     f"{plan['stop']:,.0f}円",
-                    delta=f"-{plan['loss_per_share']:.0f}円/株", delta_color="inverse")
-        col3.metric("利確候補（固定）", f"{plan['tp_fixed']:,.0f}円")
-        col4.metric("注文サイズ",      f"{plan['shares']:,}株")
+        col1.metric(
+            "🎯 買う価格の目安",
+            f"{plan['entry']:,.0f}円",
+            help="翌朝この価格帯で動きを見てから判断しましょう。必ずしもこの価格で買わなくてOKです。"
+        )
+        col2.metric(
+            "🛑 損切り価格（ここを割ったら売る）",
+            f"{plan['stop']:,.0f}円",
+            delta=f"買値より -{plan['loss_per_share']:.0f}円/株",
+            delta_color="inverse",
+            help="この価格を終値で下回ったら損失を確定して売ります。必ず事前に決めておきましょう。"
+        )
+        col3.metric(
+            "✅ 利確価格（ここで利益を受け取る）",
+            f"{plan['tp_fixed']:,.0f}円",
+            help=f"買値より+{config.TAKE_PROFIT_PERCENT}%上がったら利益確定の目安です。"
+        )
+        col4.metric(
+            "📦 推奨株数",
+            f"{plan['shares']:,}株",
+            help=f"総資金の{config.RISK_PERCENT}%以内の損失になるよう計算した株数です。これより多く買うとリスクが高くなります。"
+        )
 
         st.markdown("---")
         col_a, col_b = st.columns(2)
@@ -238,14 +311,14 @@ def render_candidate_card(rank: int, c: dict):
 | 損切り詳細 | {plan['sl_detail']}|
 """)
 
-        st.markdown("**✅ 抽出理由**")
+        st.markdown("**✅ この銘柄が選ばれた理由**")
         for r in c["reasons"]:
             st.markdown(f"- {r}")
 
         if c["warnings"]:
-            st.markdown("**⚠️ 見送り注意点**")
+            st.markdown("**⚠️ 注意点（これがあれば慎重に）**")
             for w in c["warnings"]:
-                st.warning(w)
+                st.warning(f"⚠️ {w}")
 
         if plan["pos_note"]:
             st.error(plan["pos_note"])
@@ -361,7 +434,7 @@ def render_history_tab():
 # ─── メイン ──────────────────────────────────────────────────
 def main():
     st.title("📈 株式スクリーニングツール")
-    st.caption(f"引け後スクリーニング ｜ 翌営業日の監視候補を抽出")
+    st.caption("毎日の引け後（15:30以降）に実行 → 翌日チェックすべき銘柄を自動で絞り込みます")
 
     # サイドバーから設定を取得・適用
     cfg = render_sidebar()
@@ -390,15 +463,20 @@ def main():
                 st.session_state["market_status"] = get_market_status()
         mkt = st.session_state["market_status"]
 
+        # 地合い表示
         if mkt["ok"]:
-            st.success(f"🟢 {mkt['message']}")
+            st.success(f"🟢 今日の相場は上昇トレンド中 → スクリーニング実行OK\n{mkt['message']}")
         else:
-            st.error(f"🔴 {mkt['message']}  ← 本日は見送り推奨")
+            st.error(
+                f"🔴 今日の相場は下降トレンド中 → 本日は見送りを推奨します\n"
+                f"{mkt['message']}\n\n"
+                "※ 下落相場では良い銘柄でも値下がりしやすいため、エントリーを控えるのが無難です。"
+            )
 
         st.markdown(f"""
 **対象市場**: {cfg['market']}
 **総資金**: {cfg['capital']:,}円
-**許容損失**: {cfg['risk']}%（最大損失 {cfg['capital'] * cfg['risk'] / 100:,.0f}円/トレード）
+**1回の最大損失**: {cfg['capital'] * cfg['risk'] / 100:,.0f}円
 """)
 
         col_run, col_clear = st.columns([3, 1])
@@ -723,40 +801,69 @@ def main():
     # ─── 使い方タブ ─────────────────────────────────────
     with tab_help:
         st.markdown("""
-## 使い方
+## 📖 このツールの使い方
 
-### 毎日の手順
-1. **引け後（15:30以降）** にこのページを開く
-2. 左サイドバーで **総資金** と **許容損失%** を確認
-3. **「スクリーニング実行」** ボタンを押す
-4. 候補銘柄の **エントリー候補・損切り・利確** を確認
-5. 翌朝、**候補価格帯** で寄り付きを監視して自分で判断
+### 🕒 毎日の流れ（5分でできます）
 
-### 結果の読み方
-| 項目 | 説明 |
+1. **株式市場が閉まった後（15:30以降）** にこのページを開く
+2. 画面上部の **🟢/🔴 相場状況** を確認する
+   - 🟢 なら → 「スクリーニング実行」ボタンを押す
+   - 🔴 なら → 今日は見送り（下落相場では買わない方が安全）
+3. 候補銘柄が表示されたら内容を確認する
+4. 翌朝、気になった銘柄の値動きをチェックして自分で判断する
+
+---
+
+### 📊 結果の見方（初心者向け）
+
+| 表示 | 意味 | 使い方 |
+|---|---|---|
+| **買う価格の目安** | 翌日この価格帯で動きを見る | 必ずしもこの価格で買わなくていい |
+| **損切り価格** | ここを下回ったら売る | 買ったら必ずこの価格を覚えておく |
+| **利確価格** | ここで利益を受け取る目安 | 欲張らずにここで売るのが大切 |
+| **推奨株数** | 買っていい最大の株数 | これ以上買うとリスクが高くなる |
+| **スコア** | 条件の合致度（100点満点） | 高いほど条件が揃っている |
+
+---
+
+### ⚠️ 注意点が出た銘柄は慎重に
+
+| 注意点 | 意味 |
 |---|---|
-| エントリー候補 | 翌朝この価格帯で監視。寄り付き後に動きを確認してから判断 |
-| 損切り候補 | ここを終値で割ったら即撤退。必ず事前に決めておく |
-| 利確候補（固定） | 固定+8%での利確目安 |
-| 利確（RR2） | 損切り幅×2のリスクリワードでの利確目安 |
-| 注文株数 | 許容損失内に収まる最大株数（100株単位） |
+| ギャップアップ〇%超 | 寄り付きから大きく上がりすぎ。追いかけて買うと高値づかみになりやすい |
+| 上髭が長い | 一度上がったのに売られた。勢いが弱い可能性がある |
+| 出来高急増+値幅狭い | 売買は増えているのに価格が動いていない。不自然な売買の可能性 |
+| MA25から〇%乖離 | 平均値から離れすぎ。反落しやすいタイミングの可能性 |
 
-### 見送り判断
-⚠️マークの注意点が出たら慎重に。特に：
-- **ギャップアップ5%超** → 追いかけ買いはリスク大
-- **上髭が長い** → 当日売り圧力が強い
-- **地合いが悪い** → watchlistの大半が候補ゼロの日は見送り推奨
+---
 
-### スマホからのアクセス
-PCとスマホが同じWi-Fiに繋がっていれば、
-スマホのブラウザで `http://<PCのIPアドレス>:8501` にアクセスできます。
+### 💼 ポートフォリオタブの使い方
 
-### watchlist.txtの編集
-`data/watchlist.txt` に証券コードを1行1銘柄で追加するだけで対象銘柄を増やせます。
-```
-7203   # トヨタ
-6758   # ソニー
-```
+実際に買った銘柄を記録すると：
+- 現在の損益をリアルタイムで確認できる
+- いくら損切り・利確まであるかが一目でわかる
+- 決済後の記録が自動で残る
+
+**手順**: スクリーニング結果 →「📝 ポジションに追加する」ボタン → 💼ポートフォリオタブで確認
+
+---
+
+### 📚 用語集
+
+| 用語 | 意味 |
+|---|---|
+| **スクリーニング** | 大量の株の中から条件に合う銘柄だけを絞り込むこと |
+| **損切り（ロスカット）** | 損失が一定以上になったら売って損失を確定すること。これをしないと大損につながる |
+| **利確（利益確定）** | 値上がりしたところで売って利益を受け取ること |
+| **出来高** | その日に売買された株の数。多いほど注目されている |
+| **MA25（25日移動平均線）** | 過去25日間の株価の平均。これより上にいると上昇トレンドの目安 |
+| **地合い** | 相場全体の雰囲気。地合いが悪いと良い銘柄でも下がりやすい |
+| **エントリー** | 株を買うこと |
+| **ポジション** | 現在保有している株のこと |
+
+---
+
+> ⚠️ **注意**: このツールは情報提供のみが目的です。表示された情報は投資の推奨ではありません。投資判断はご自身の責任で行ってください。
 """)
 
 
