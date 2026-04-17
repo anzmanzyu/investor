@@ -302,7 +302,9 @@ def main():
     apply_settings(cfg)
 
     # タブ
-    tab_screen, tab_backtest, tab_history, tab_help = st.tabs(["🔍 スクリーニング", "📊 バックテスト", "📚 履歴", "❓ 使い方"])
+    tab_screen, tab_portfolio, tab_backtest, tab_history, tab_help = st.tabs([
+        "🔍 スクリーニング", "💼 ポートフォリオ", "📊 バックテスト", "📚 履歴", "❓ 使い方"
+    ])
 
     # ─── スクリーニングタブ ──────────────────────────────
     with tab_screen:
@@ -365,6 +367,155 @@ def main():
             st.subheader("📄 詳細")
             for rank, c in enumerate(candidates, 1):
                 render_candidate_card(rank, c)
+
+    # ─── ポートフォリオタブ ───────────────────────────────
+    with tab_portfolio:
+        import portfolio as pf_module
+
+        st.subheader("💼 ポートフォリオ（リアルタイム損益）")
+        st.caption("実際にエントリーしたポジションを記録して損益をリアルタイム表示します。")
+
+        # ── サマリー ─────────────────────────────────────
+        summary = pf_module.get_summary()
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("総トレード数", f"{summary['total']}件")
+        c2.metric("保有中", f"{summary['open']}件")
+        c3.metric("決済済み", f"{summary['closed']}件")
+        c4.metric("確定損益", f"{summary['realized_pnl']:+,.0f}円")
+        c5.metric("勝/負", f"{summary['win']}勝 {summary['lose']}敗")
+
+        st.markdown("---")
+
+        # ── オープンポジション ────────────────────────────
+        st.markdown("### 📌 保有中ポジション（現在値自動更新）")
+
+        if st.button("🔄 現在値を更新", key="refresh_pf"):
+            st.rerun()
+
+        with st.spinner("現在値取得中..."):
+            open_positions = pf_module.get_open_positions_with_pnl()
+
+        if not open_positions:
+            st.info("保有中のポジションはありません。下のフォームから追加してください。")
+        else:
+            for pos in open_positions:
+                pnl_color = "🟢" if pos["未実現損益"] >= 0 else "🔴"
+                with st.expander(
+                    f"{pos['状態']}  {pos['銘柄コード']} {pos['銘柄名']}  "
+                    f"損益: {pnl_color} {pos['未実現損益']:+,.0f}円（{pos['損益率']:+.1f}%）",
+                    expanded=True
+                ):
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("エントリー価格", f"{pos['エントリー価格']:,.0f}円")
+                    col2.metric("現在値", f"{pos['現在値']:,.0f}円",
+                                delta=f"{pos['損益率']:+.1f}%")
+                    col3.metric("損切りまで",
+                                f"{pos['現在値'] - pos['損切り価格']:+,.0f}円")
+                    col4.metric("利確まで",
+                                f"{pos['利確価格'] - pos['現在値']:+,.0f}円")
+
+                    st.markdown(
+                        f"**株数**: {pos['株数']:,}株　"
+                        f"**未実現損益**: {pos['未実現損益']:+,.0f}円　"
+                        f"**エントリー日**: {pos['エントリー日']}"
+                    )
+                    if pos["メモ"]:
+                        st.caption(f"メモ: {pos['メモ']}")
+
+                    # 決済ボタン
+                    with st.form(key=f"close_{pos['id']}"):
+                        st.markdown("**決済する**")
+                        exit_col1, exit_col2, exit_col3 = st.columns(3)
+                        exit_price  = exit_col1.number_input(
+                            "決済価格", value=float(pos["現在値"]), step=1.0, key=f"ep_{pos['id']}")
+                        exit_reason = exit_col2.selectbox(
+                            "決済理由",
+                            ["利確", "損切り", "手動決済", "その他"],
+                            key=f"er_{pos['id']}"
+                        )
+                        exit_date = exit_col3.date_input(
+                            "決済日", value=date.today(), key=f"ed_{pos['id']}")
+                        if st.form_submit_button("✅ 決済を記録"):
+                            pf_module.close_position(
+                                pos["id"], exit_price, exit_reason,
+                                exit_date.strftime("%Y-%m-%d")
+                            )
+                            st.success(f"{pos['銘柄名']} を決済しました")
+                            st.rerun()
+
+        st.markdown("---")
+
+        # ── 新規ポジション追加フォーム ────────────────────
+        st.markdown("### ➕ 新規ポジションを追加")
+        with st.form("add_position"):
+            col_a, col_b, col_c = st.columns(3)
+            new_date   = col_a.date_input("エントリー日", value=date.today())
+            new_symbol = col_b.text_input("銘柄コード（例: 7203）")
+            new_name   = col_c.text_input("銘柄名（例: トヨタ）")
+
+            col_d, col_e, col_f = st.columns(3)
+            new_entry  = col_d.number_input("エントリー価格（円）", min_value=1.0, step=1.0)
+            new_shares = col_e.number_input("株数", min_value=1, step=100)
+            new_memo   = col_f.text_input("メモ（任意）")
+
+            col_g, col_h = st.columns(2)
+            new_stop = col_g.number_input(
+                "損切り価格（円）",
+                value=round(new_entry * (1 - config.STOP_LOSS_PERCENT / 100), 0),
+                step=1.0
+            )
+            new_tp = col_h.number_input(
+                "利確価格（円）",
+                value=round(new_entry * (1 + config.TAKE_PROFIT_PERCENT / 100), 0),
+                step=1.0
+            )
+
+            if new_entry > 0:
+                loss_per_share = new_entry - new_stop
+                max_loss = loss_per_share * new_shares
+                st.caption(
+                    f"最大損失: {max_loss:,.0f}円　"
+                    f"（損失率: {max_loss / config.TOTAL_CAPITAL * 100:.1f}%）"
+                )
+
+            submitted = st.form_submit_button("📝 追加する", type="primary")
+            if submitted:
+                if not new_symbol or not new_name or new_entry <= 0:
+                    st.error("銘柄コード・銘柄名・エントリー価格を入力してください")
+                else:
+                    pf_module.add_position(
+                        new_date.strftime("%Y-%m-%d"),
+                        new_symbol, new_name,
+                        new_entry, int(new_shares),
+                        new_stop, new_tp, new_memo
+                    )
+                    st.success(f"✅ {new_name} を追加しました")
+                    st.rerun()
+
+        # ── 決済済みポジション ────────────────────────────
+        st.markdown("---")
+        st.markdown("### 📋 決済済みポジション")
+        df_all = pf_module.load_positions()
+        closed_df = df_all[df_all["ステータス"] == "closed"]
+        if closed_df.empty:
+            st.info("決済済みのポジションはまだありません。")
+        else:
+            disp = closed_df[[
+                "エントリー日", "銘柄コード", "銘柄名",
+                "エントリー価格", "決済日", "決済価格", "決済理由", "確定損益"
+            ]].copy()
+            disp["確定損益"] = pd.to_numeric(disp["確定損益"], errors="coerce")
+
+            def color_pnl2(val):
+                try:
+                    return "color: #00c853" if float(val) > 0 else "color: #ff5252"
+                except Exception:
+                    return ""
+
+            st.dataframe(
+                disp.style.map(color_pnl2, subset=["確定損益"]),
+                use_container_width=True, hide_index=True
+            )
 
     # ─── バックテストタブ ─────────────────────────────────
     with tab_backtest:
