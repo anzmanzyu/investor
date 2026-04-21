@@ -32,6 +32,11 @@ import history as history_module
 from config_manager import load_settings, save_settings
 
 
+def _sn(symbol: str, name: str) -> str:
+    """銘柄表示用ヘルパー: '7203:トヨタ自動車' 形式に統一する"""
+    return f"{symbol}:{name}"
+
+
 # ─── CSS（スマホ対応・レスポンシブ）────────────────────────
 st.markdown("""
 <style>
@@ -340,7 +345,7 @@ def run_screening_with_progress(symbols: list[str], force_refresh: bool = False)
                 if result:
                     with lock:
                         results.append(result)
-                    status_text.success(f"✅ 通過: {sym} {result['name']}  スコア:{result['score']}")
+                    status_text.success(f"✅ 通過: {_sn(sym, result['name'])}  スコア:{result['score']}")
             except Exception:
                 pass
 
@@ -359,7 +364,7 @@ def render_candidate_card(rank: int, c: dict):
     score_color = "score-high" if score >= 80 else ("score-mid" if score >= 60 else "score-low")
 
     with st.expander(
-        f"#{rank}  {c['symbol']} {c['name']}  "
+        f"#{rank}  {_sn(c['symbol'], c['name'])}  "
         f"｜ 現在値: {c['close']:,.0f}円  "
         f"｜ スコア: {score}点",
         expanded=(rank <= 3),
@@ -454,7 +459,7 @@ def render_candidate_card(rank: int, c: dict):
                     tp          = plan["tp_fixed"],
                     memo        = f"スコア{c['score']}点 / " + c["reasons"][0] if c["reasons"] else "",
                 )
-                st.success(f"✅ {c['name']} をポートフォリオに追加しました！ → 💼ポートフォリオタブで確認できます")
+                st.success(f"✅ {_sn(c['symbol'], c['name'])} をポートフォリオに追加しました！ → 💼ポートフォリオタブで確認できます")
         with col_msg:
             if c["warnings"]:
                 st.caption(f"⚠️ 注意: {c['warnings'][0]}")
@@ -467,8 +472,7 @@ def render_summary_table(candidates: list[dict]):
         plan = c["plan"]
         rows.append({
             "順位"        : rank,
-            "コード"      : c["symbol"],
-            "銘柄名"      : c["name"],
+            "銘柄"        : _sn(c["symbol"], c["name"]),
             "現在値"      : c["close"],
             "スコア"      : c["score"],
             "エントリー"  : plan["entry"],
@@ -580,11 +584,12 @@ def render_dividend_tab():
 
         for h in holdings:
             pnl_color = "🟢" if h["含み損益"] >= 0 else "🔴"
+            _stock_label = _sn(h["銘柄コード"], h["銘柄名"])
             with st.expander(
-                f"{h['状態']}  {h['銘柄コード']} {h['銘柄名']}  "
+                f"{h['状態']}  {_stock_label}  "
                 f"含み損益: {pnl_color} {h['含み損益']:+,.0f}円  "
                 f"（現在利回り: {h['現在利回り']:.2f}%）" if h["現在利回り"] else
-                f"{h['状態']}  {h['銘柄コード']} {h['銘柄名']}  "
+                f"{h['状態']}  {_stock_label}  "
                 f"含み損益: {pnl_color} {h['含み損益']:+,.0f}円",
                 expanded=False,
             ):
@@ -679,7 +684,7 @@ def render_dividend_tab():
                 # ── 削除ボタン ────────────────────────────────
                 if st.button(f"🗑 {h['銘柄名']}を削除", key=f"del_div_{h['id']}"):
                     dm.remove_stock(h["id"])
-                    st.success(f"{h['銘柄名']}を削除しました")
+                    st.success(f"{_sn(h['銘柄コード'], h['銘柄名'])}を削除しました")
                     st.rerun()
     else:
         st.info("高配当株がまだ登録されていません。下のフォームから追加してください。")
@@ -703,7 +708,7 @@ def render_dividend_tab():
                 st.error("銘柄コード・銘柄名・取得単価を入力してください")
             else:
                 dm.add_stock(new_sym, new_name, int(new_shares), new_cost, new_sect)
-                st.success(f"✅ {new_name} を追加しました")
+                st.success(f"✅ {_sn(new_sym, new_name)} を追加しました")
                 st.rerun()
 
 
@@ -902,7 +907,7 @@ def main():
             for pos in open_positions:
                 pnl_color = "🟢" if pos["未実現損益"] >= 0 else "🔴"
                 with st.expander(
-                    f"{pos['状態']}  {pos['銘柄コード']} {pos['銘柄名']}  "
+                    f"{pos['状態']}  {_sn(pos['銘柄コード'], pos['銘柄名'])}  "
                     f"損益: {pnl_color} {pos['未実現損益']:+,.0f}円（{pos['損益率']:+.1f}%）",
                     expanded=True
                 ):
@@ -940,7 +945,7 @@ def main():
                                 pos["id"], exit_price, exit_reason,
                                 exit_date.strftime("%Y-%m-%d")
                             )
-                            st.success(f"{pos['銘柄名']} を決済しました")
+                            st.success(f"{_sn(pos['銘柄コード'], pos['銘柄名'])} を決済しました")
                             st.rerun()
 
         st.markdown("---")
@@ -987,7 +992,7 @@ def main():
                         new_entry, int(new_shares),
                         new_stop, new_tp, new_memo
                     )
-                    st.success(f"✅ {new_name} を追加しました")
+                    st.success(f"✅ {_sn(new_symbol, new_name)} を追加しました")
                     st.rerun()
 
         st.markdown("---")
@@ -1001,6 +1006,10 @@ def main():
                 "エントリー日", "銘柄コード", "銘柄名",
                 "エントリー価格", "決済日", "決済価格", "決済理由", "確定損益"
             ]].copy()
+            disp["銘柄"] = disp.apply(
+                lambda r: _sn(str(r["銘柄コード"]), str(r["銘柄名"])), axis=1
+            )
+            disp = disp[["エントリー日", "銘柄", "エントリー価格", "決済日", "決済価格", "決済理由", "確定損益"]]
             disp["確定損益"] = pd.to_numeric(disp["確定損益"], errors="coerce")
 
             def color_pnl2(val):
@@ -1087,6 +1096,10 @@ def main():
                     .sum().reset_index()
                     .sort_values("損益合計", ascending=False)
                 )
+                sym_df["銘柄"] = sym_df.apply(
+                    lambda r: _sn(str(r["銘柄コード"]), str(r["銘柄名"])), axis=1
+                )
+                sym_df = sym_df[["銘柄", "損益合計"]]
                 sym_df["損益合計"] = sym_df["損益合計"].map(lambda x: f"{x:+,.0f}円")
                 st.dataframe(sym_df.head(15), use_container_width=True, hide_index=True)
 
@@ -1095,6 +1108,13 @@ def main():
                     "エントリー日", "銘柄コード", "銘柄名",
                     "エントリー価格", "決済日", "決済理由", "損益率%", "損益合計"
                 ]].copy()
+                display["銘柄"] = display.apply(
+                    lambda r: _sn(str(r["銘柄コード"]), str(r["銘柄名"])), axis=1
+                )
+                display = display[[
+                    "エントリー日", "銘柄", "エントリー価格",
+                    "決済日", "決済理由", "損益率%", "損益合計"
+                ]]
                 display["損益合計"] = display["損益合計"].map(lambda x: f"{x:+,.0f}円")
 
                 def color_pnl(val):
