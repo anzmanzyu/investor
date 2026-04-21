@@ -21,6 +21,7 @@ try:
     if webhook:
         import config
         config.DISCORD_WEBHOOK_URL = webhook
+        config.OUTPUT_DISCORD = True   # URLがあれば自動で通知ON
 except ImportError:
     pass
 
