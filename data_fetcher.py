@@ -146,8 +146,14 @@ def fetch_info(symbol: str) -> dict:
     ticker = _build_ticker(symbol)
     try:
         info = yf.Ticker(ticker).info
+        # 日本株は shortName が日本語名になることが多いため優先する
+        # 米国株は longName（正式英語名）を優先する
+        if config.MARKET == "JP":
+            name = info.get("shortName") or info.get("longName") or symbol
+        else:
+            name = info.get("longName") or info.get("shortName") or symbol
         return {
-            "name"    : info.get("longName") or info.get("shortName") or symbol,
+            "name"    : name,
             "sector"  : info.get("sector", ""),
             "industry": info.get("industry", ""),
             "currency": info.get("currency", "JPY"),
