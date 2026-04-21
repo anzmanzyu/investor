@@ -79,7 +79,7 @@ def add_position(entry_date, symbol, name, entry_price, shares, stop, tp, memo="
 
 
 def close_position(pos_id: int, exit_price: float, exit_reason: str, exit_date: str = None):
-    """ポジションを決済する"""
+    """ポジションを決済し、history.csv にも自動で記録する（改良⑦）"""
     df = load_positions()
     idx = df[df["id"] == pos_id].index
     if idx.empty:
@@ -89,6 +89,9 @@ def close_position(pos_id: int, exit_price: float, exit_reason: str, exit_date: 
     entry_price = float(df.at[i, "エントリー価格"])
     shares      = int(df.at[i, "株数"])
     pnl         = (exit_price - entry_price) * shares
+    entry_date  = str(df.at[i, "エントリー日"])
+    symbol      = str(df.at[i, "銘柄コード"])
+    name        = str(df.at[i, "銘柄名"])
 
     df.at[i, "ステータス"]  = "closed"
     df.at[i, "決済日"]      = exit_date or date.today().strftime("%Y-%m-%d")
@@ -96,6 +99,21 @@ def close_position(pos_id: int, exit_price: float, exit_reason: str, exit_date: 
     df.at[i, "決済理由"]    = exit_reason
     df.at[i, "確定損益"]    = round(pnl, 0)
     save_positions(df)
+
+    # ── history.csv に自動書き込み（改良⑦）────────────────
+    try:
+        import history as history_module
+        history_module.upsert_trade_result(
+            entry_date  = entry_date,
+            symbol      = symbol,
+            name        = name,
+            pnl         = round(pnl, 0),
+            entry_price = entry_price,
+            exit_price  = exit_price,
+        )
+    except Exception as e:
+        print(f"[portfolio] history.csv への記録に失敗: {e}")
+
     return True
 
 

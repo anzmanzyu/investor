@@ -80,6 +80,66 @@ def save_history(candidates: list[dict], run_date: str = None) -> None:
     print(f"[History] {len(candidates)}件を履歴に追記しました: {config.HISTORY_CSV}")
 
 
+def upsert_trade_result(
+    entry_date: str,
+    symbol: str,
+    name: str,
+    pnl: float,
+    entry_price: float = 0,
+    exit_price: float  = 0,
+) -> None:
+    """
+    決済結果を history.csv に upsert する（改良⑦）。
+    同一銘柄コード × 通知日のレコードが存在する場合は上書き更新し、
+    なければ新規追記する。portfolio.py の close_position() から呼ばれる。
+
+    Args:
+        entry_date  : エントリー日（YYYY-MM-DD）
+        symbol      : 銘柄コード
+        name        : 銘柄名
+        pnl         : 確定損益（円）
+        entry_price : 実際のエントリー価格
+        exit_price  : 決済価格
+    """
+    _ensure_file()
+    import pandas as pd
+
+    result = "勝ち" if pnl > 0 else "負け"
+
+    try:
+        df = pd.read_csv(config.HISTORY_CSV, encoding="utf-8-sig")
+    except Exception:
+        df = pd.DataFrame(columns=HISTORY_FIELDS)
+
+    # 型を合わせて一致行を探す
+    mask = (df["銘柄コード"].astype(str) == str(symbol)) & (df["通知日"] == entry_date)
+
+    if mask.any():
+        # 既存レコードを更新
+        df.loc[mask, "実際に入ったか"]       = "はい"
+        df.loc[mask, "実際のエントリー価格"] = entry_price
+        df.loc[mask, "実際のエグジット価格"] = exit_price
+        df.loc[mask, "勝負"]                 = result
+        df.loc[mask, "損益(円)"]             = round(pnl, 0)
+    else:
+        # 新規追記（スクリーニング通知外からの手動エントリー）
+        new_row = {f: "" for f in HISTORY_FIELDS}
+        new_row.update({
+            "通知日"              : entry_date,
+            "銘柄コード"          : symbol,
+            "銘柄名"              : name,
+            "実際に入ったか"      : "はい",
+            "実際のエントリー価格": entry_price,
+            "実際のエグジット価格": exit_price,
+            "勝負"                : result,
+            "損益(円)"            : round(pnl, 0),
+        })
+        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+
+    df.to_csv(config.HISTORY_CSV, index=False, encoding="utf-8-sig")
+    print(f"[History] {symbol} の決済結果を history.csv に記録しました")
+
+
 def print_stats() -> None:
     """
     履歴 CSV の簡易統計を表示する。

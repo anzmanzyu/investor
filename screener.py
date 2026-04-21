@@ -41,8 +41,9 @@ def screen(symbol: str, df: pd.DataFrame, info: dict) -> Optional[ScreenResult]:
     if close < config.MIN_PRICE:
         return None
 
-    # 2. 出来高薄すぎ除外
-    if volume < config.MIN_VOLUME_PER_DAY:
+    # 2. 売買代金フィルター（改良⑤）: 終値 × 出来高 < MIN_TURNOVER は除外
+    turnover = close * volume
+    if turnover < config.MIN_TURNOVER:
         return None
 
     # 3. MA25が有効値か
@@ -65,10 +66,14 @@ def screen(symbol: str, df: pd.DataFrame, info: dict) -> Optional[ScreenResult]:
     if not new_high:
         return None
 
+    # ── データ品質チェック（改良②）────────────────────────────
+    from data_fetcher import validate_ohlcv
+    quality_warnings = validate_ohlcv(df, symbol)
+
     # ── スコア計算 ─────────────────────────────────────────
     score = 0
     reasons = []
-    warnings = []
+    warnings = list(quality_warnings)   # データ品質警告をマージ
 
     # 条件: MA25 上にいる（ここまで来ていれば確実にTrue）
     score += config.SCORE_WEIGHTS["above_ma25"]

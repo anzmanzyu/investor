@@ -132,6 +132,46 @@ def is_market_ok(asof_date: str = None, market_df: pd.DataFrame = None) -> tuple
     return True, f"地合いOK: TOPIX {close:.0f}(MA25比+{pct:.1f}%)"
 
 
+def get_advance_decline_ratio(symbols: list, max_symbols: int = 200) -> float:
+    """
+    watchlist 上位 max_symbols 銘柄の前日比から騰落レシオを近似計算する（改良④）。
+    値上がり銘柄数 ÷ 値下がり銘柄数 × 100 を返す。
+    全銘柄値上がりの場合は 150.0 を返す。
+
+    Args:
+        symbols     : 銘柄コードのリスト
+        max_symbols : 使用する上限銘柄数
+
+    Returns:
+        float: 騰落レシオ
+    """
+    from data_fetcher import fetch_ohlcv_cached
+
+    target   = symbols[:max_symbols]
+    advances = 0
+    declines = 0
+
+    for sym in target:
+        try:
+            df = fetch_ohlcv_cached(sym)
+            if df is None or len(df) < 2:
+                continue
+            prev_close = float(df["Close"].iloc[-2])
+            last_close = float(df["Close"].iloc[-1])
+            if prev_close <= 0:
+                continue
+            if last_close > prev_close:
+                advances += 1
+            else:
+                declines += 1
+        except Exception:
+            continue
+
+    if declines == 0:
+        return 150.0
+    return round(advances / declines * 100, 1)
+
+
 def get_market_status() -> dict:
     """現在の地合い情報をまとめて返す（Webアプリ表示用）"""
     df = fetch_market_data()

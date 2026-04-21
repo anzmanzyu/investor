@@ -4,9 +4,11 @@ data_fetcher.py — yfinance を使った株価データ取得
 米国株: ticker そのまま（例: "AAPL"）
 """
 
+import os
 import yfinance as yf
 import pandas as pd
 import numpy as np
+from datetime import date, datetime
 from typing import Optional
 import config
 
@@ -53,6 +55,87 @@ def fetch_ohlcv(symbol: str, period: str = "3mo") -> Optional[pd.DataFrame]:
     except Exception as e:
         print(f"  [WARN] {symbol} データ取得失敗: {e}")
         return None
+
+
+def fetch_ohlcv_cached(symbol: str, period: str = "3mo", force_refresh: bool = False) -> Optional[pd.DataFrame]:
+    """
+    OHLCVをparquetキャッシュから取得する（改良③）。
+    当日中のキャッシュが有効な場合は再利用し、なければfetch_ohlcvで取得して保存する。
+
+    Args:
+        symbol       : 銘柄コード
+        period       : 取得期間（キャッシュミス時のみ使用）
+        force_refresh: True の場合はキャッシュを無視して再取得
+
+    Returns:
+        OHLCV DataFrame または None
+    """
+    cache_dir  = "data/cache"
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_path = os.path.join(cache_dir, f"{symbol}.parquet")
+    today      = date.today()
+
+    # キャッシュが当日中かつ force_refresh=False なら再利用
+    if not force_refresh and os.path.exists(cache_path):
+        try:
+            mtime = datetime.fromtimestamp(os.path.getmtime(cache_path)).date()
+            if mtime == today:
+                df = pd.read_parquet(cache_path)
+                if df is not None and not df.empty:
+                    return df
+        except Exception:
+            pass  # キャッシュ読み込み失敗 → 再取得へ
+
+    # 新規取得してキャッシュに保存
+    df = fetch_ohlcv(symbol, period)
+    if df is not None:
+        try:
+            df.to_parquet(cache_path)
+        except Exception as e:
+            print(f"  [WARN] {symbol} キャッシュ保存失敗: {e}")
+    return df
+
+
+def validate_ohlcv(df: pd.DataFrame, symbol: str) -> list[str]:
+    """
+    OHLCVデータの品質チェックを行い、問題点のリストを返す（改良②）。
+    screener.screen() の warnings リストにマージして使用する。
+
+    チェック項目:
+        1. 直近データが3日以上（5暦日）古い
+        2. 出来高ゼロの日が3日以上ある
+        3. Close の NaN 比率が 5% 超
+    """
+    warnings_list: list[str] = []
+    if df is None or df.empty:
+        return warnings_list
+
+    # 1. 最終データ日付チェック
+    try:
+        last_date = df.index[-1].date() if hasattr(df.index[-1], "date") else df.index[-1]
+        staleness = (date.today() - last_date).days
+        if staleness >= 5:
+            warnings_list.append(f"データが{staleness}日前（{last_date}）と古い可能性があります")
+    except Exception:
+        pass
+
+    # 2. 出来高ゼロ日数チェック
+    try:
+        zero_vol_days = int((df["Volume"] == 0).sum())
+        if zero_vol_days >= 3:
+            warnings_list.append(f"出来高ゼロの日が{zero_vol_days}日あります（流動性に注意）")
+    except Exception:
+        pass
+
+    # 3. Close の NaN 比率チェック
+    try:
+        nan_ratio = df["Close"].isna().sum() / len(df)
+        if nan_ratio > 0.05:
+            warnings_list.append(f"価格データの{nan_ratio*100:.1f}%が欠損しています")
+    except Exception:
+        pass
+
+    return warnings_list
 
 
 def fetch_info(symbol: str) -> dict:

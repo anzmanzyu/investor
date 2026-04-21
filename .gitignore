@@ -2,6 +2,9 @@
 data/output/
 data/history.csv
 data/positions.csv
+data/cache/
+data/user_settings.json
+data/dividend_portfolio.csv
 __pycache__/
 *.pyc
 .venv/

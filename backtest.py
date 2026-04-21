@@ -73,8 +73,10 @@ def simulate_trade(full_df: pd.DataFrame, entry_date: str,
             "pnl_pct": float,
         }
     """
+    # エントリー当日（始値でIN）から評価開始。>= とすることで
+    # 当日の High/Low でも SL/TP ヒットを正確に判定する（改良⑧）
     cutoff = pd.Timestamp(entry_date)
-    future = full_df[full_df.index > cutoff].head(MAX_HOLD_DAYS)
+    future = full_df[full_df.index >= cutoff].head(MAX_HOLD_DAYS)
 
     if future.empty:
         return None

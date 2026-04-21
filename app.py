@@ -8,11 +8,13 @@ app.py — Streamlit Webアプリ版 株式スクリーニングツール
 スマホからは http://<PCのIPアドレス>:8501 でアクセス可能
 """
 
-import streamlit as st
-import pandas as pd
+import io
 import threading
 from datetime import date, datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import streamlit as st
+import pandas as pd
 
 # ページ設定（一番最初に呼ぶ必要がある）
 st.set_page_config(
@@ -27,6 +29,7 @@ import data_fetcher
 import screener
 import calculator
 import history as history_module
+from config_manager import load_settings, save_settings
 
 
 # ─── CSS（スマホ対応・レスポンシブ）────────────────────────
@@ -42,47 +45,32 @@ st.markdown("""
 
     /* スマホ対応（画面幅600px以下） */
     @media (max-width: 600px) {
-        /* タイトルを小さく */
         h1 { font-size: 1.4rem !important; }
         h2 { font-size: 1.2rem !important; }
         h3 { font-size: 1.0rem !important; }
 
-        /* カラムを縦積みに */
         [data-testid="column"] {
             width: 100% !important;
             flex: 1 1 100% !important;
             min-width: 100% !important;
         }
 
-        /* メトリクスを小さく */
-        [data-testid="stMetricValue"] {
-            font-size: 1.1rem !important;
-        }
-        [data-testid="stMetricLabel"] {
-            font-size: 0.75rem !important;
-        }
+        [data-testid="stMetricValue"] { font-size: 1.1rem !important; }
+        [data-testid="stMetricLabel"] { font-size: 0.75rem !important; }
 
-        /* ボタンを大きく（タップしやすく） */
         .stButton > button {
             height: 3rem !important;
             font-size: 1rem !important;
         }
 
-        /* サイドバーを非表示にしてメインを広く */
-        [data-testid="stSidebar"] {
-            min-width: 0 !important;
-        }
+        [data-testid="stSidebar"] { min-width: 0 !important; }
 
-        /* タブ文字を小さく */
         .stTabs [data-baseweb="tab"] {
             font-size: 0.75rem !important;
             padding: 6px 8px !important;
         }
 
-        /* テーブルをスクロール可能に */
-        [data-testid="stDataFrame"] {
-            overflow-x: auto !important;
-        }
+        [data-testid="stDataFrame"] { overflow-x: auto !important; }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -94,11 +82,14 @@ def render_sidebar() -> dict:
     st.sidebar.caption("最初はそのままでOKです。慣れてきたら少しずつ調整してみましょう。")
     st.sidebar.markdown("---")
 
+    # 保存済み設定を読み込む（改良⑥）
+    saved = load_settings()
+
     # ── STEP 1: 資金 ────────────────────────────────────────
     st.sidebar.markdown("### 💰 STEP 1｜用意する資金")
     capital = st.sidebar.number_input(
         "株に使う金額（円）",
-        value=config.TOTAL_CAPITAL,
+        value=int(saved["capital"]),
         step=100_000, min_value=10_000, format="%d",
     )
 
@@ -108,10 +99,16 @@ def render_sidebar() -> dict:
     st.sidebar.markdown("### 🛡️ STEP 2｜1回でいくらまで損していい？")
     st.sidebar.caption("「これ以上損したら売る」金額のルールです。小さいほど安全です。")
 
+    default_risk_yen = int(capital * saved["risk"] / 100)
+    risk_options     = [1000, 2000, 3000, 5000, 10000, 15000, 20000]
+    # 保存値が選択肢にない場合は最近傍に丸める
+    if default_risk_yen not in risk_options:
+        default_risk_yen = min(risk_options, key=lambda x: abs(x - default_risk_yen))
+
     risk_yen = st.sidebar.select_slider(
         "1回の最大損失額",
-        options=[1000, 2000, 3000, 5000, 10000, 15000, 20000],
-        value=int(capital * config.RISK_PERCENT / 100),
+        options=risk_options,
+        value=default_risk_yen,
         format_func=lambda x: f"{x:,}円"
     )
     risk = risk_yen / capital * 100
@@ -130,7 +127,7 @@ def render_sidebar() -> dict:
         stop_pct = st.select_slider(
             "下落幅",
             options=[2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0, 8.0, 10.0],
-            value=config.STOP_LOSS_PERCENT,
+            value=float(saved["stop_pct"]),
             format_func=lambda x: f"-{x}%",
             key="stop_slider"
         )
@@ -139,7 +136,7 @@ def render_sidebar() -> dict:
         tp_pct = st.select_slider(
             "上昇幅",
             options=[4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0, 15.0, 20.0],
-            value=config.TAKE_PROFIT_PERCENT,
+            value=float(saved["tp_pct"]),
             format_func=lambda x: f"+{x}%",
             key="tp_slider"
         )
@@ -165,26 +162,65 @@ def render_sidebar() -> dict:
     # ── 詳細設定（折りたたみ）──────────────────────────────
     with st.sidebar.expander("🔧 詳細設定（上級者向け）"):
         st.caption("通常はそのままでOKです。")
+
         market_raw = st.radio(
             "対象市場",
             ["🇯🇵 日本株", "🇺🇸 米国株"],
-            index=0 if config.MARKET == "JP" else 1,
+            index=0 if saved["market"] == "JP" else 1,
         )
         vol_ratio_min = st.slider(
             "出来高の急増倍率（普段より何倍以上か）",
-            1.0, 3.0, config.VOLUME_RATIO_MIN, step=0.1,
+            1.0, 3.0, float(saved["vol_ratio_min"]), step=0.1,
             help="普段より多く売買されている銘柄だけを表示します。1.5倍＝普段の1.5倍以上。"
         )
         min_price = st.number_input(
             "最低株価（円以下は除外）",
-            value=config.MIN_PRICE, step=100, min_value=0,
+            value=int(saved["min_price"]), step=100, min_value=0,
             help="あまりにも安い株は値動きが荒いため除外します。"
         )
         max_candidates = st.slider(
             "表示する候補数",
-            3, 20, config.MAX_CANDIDATES,
+            3, 20, int(saved["max_candidates"]),
             help="スコアが高い順に表示する銘柄数。"
         )
+
+        # ── 売買代金フィルター（改良⑤）──────────────────────
+        st.markdown("---")
+        st.markdown("**📊 売買代金フィルター**")
+        st.caption("1日あたりの売買代金が少ない銘柄は流動性が低いため除外します。")
+
+        def _fmt_turnover(x: int) -> str:
+            if x >= 100_000_000:
+                return f"{x // 100_000_000}億円"
+            return f"{x // 10_000:,}万円"
+
+        turnover_options = [50_000_000, 100_000_000, 200_000_000, 500_000_000]
+        saved_turnover   = int(saved.get("min_turnover", config.MIN_TURNOVER))
+        if saved_turnover not in turnover_options:
+            saved_turnover = min(turnover_options, key=lambda x: abs(x - saved_turnover))
+
+        min_turnover = st.select_slider(
+            "最低売買代金",
+            options=turnover_options,
+            value=saved_turnover,
+            format_func=_fmt_turnover,
+        )
+
+        # ── 取引単位（改良⑨）────────────────────────────────
+        st.markdown("---")
+        st.markdown("**📦 取引単位**")
+        lot_index   = 0 if int(saved.get("lot_size", 100)) == 100 else 1
+        lot_label   = st.radio(
+            "注文単位",
+            ["通常株（100株単位）", "ミニ株（1株単位）"],
+            index=lot_index,
+        )
+        lot_size = 100 if "100株" in lot_label else 1
+        if lot_size == 1:
+            st.caption(
+                "かぶミニ®は指値・逆指値不可。損切りは手動対応が必要です。"
+                "バックテスト結果との乖離が生じる可能性があります。"
+            )
 
     st.sidebar.markdown("---")
     st.sidebar.caption("💡 設定を変えたら「スクリーニング実行」を押し直してください。")
@@ -198,6 +234,8 @@ def render_sidebar() -> dict:
         "stop_pct"      : stop_pct,
         "tp_pct"        : tp_pct,
         "market"        : "JP" if "日本" in market_raw else "US",
+        "min_turnover"  : min_turnover,
+        "lot_size"      : lot_size,
     }
 
 
@@ -211,22 +249,73 @@ def apply_settings(cfg: dict):
     config.STOP_LOSS_PERCENT   = cfg["stop_pct"]
     config.TAKE_PROFIT_PERCENT = cfg["tp_pct"]
     config.MARKET              = cfg["market"]
+    config.MIN_TURNOVER        = cfg["min_turnover"]
+    config.LOT_SIZE            = cfg["lot_size"]
+
+
+# ─── チャート表示（改良①）───────────────────────────────────
+def render_chart(symbol: str):
+    """mplfinance でローソク足チャート（直近60日 + MA25 + 出来高）を表示する"""
+    try:
+        import mplfinance as mpf
+        import matplotlib.pyplot as plt
+    except ImportError:
+        st.caption("チャート表示には mplfinance が必要です（pip install mplfinance）")
+        return
+
+    df = data_fetcher.fetch_ohlcv_cached(
+        symbol,
+        force_refresh=st.session_state.get("force_refresh", False)
+    )
+    if df is None or len(df) < 30:
+        st.caption("チャートデータ取得失敗")
+        return
+
+    df_chart = df.tail(60).copy()
+    df_chart.index = pd.DatetimeIndex(df_chart.index)
+
+    # MA25 を addplot に追加
+    ma25 = df_chart["Close"].rolling(25).mean()
+    add_plots = [
+        mpf.make_addplot(ma25, color="orange", width=1.5, label="MA25"),
+    ]
+
+    try:
+        fig, _ = mpf.plot(
+            df_chart,
+            type="candle",
+            volume=True,
+            addplot=add_plots,
+            style="yahoo",
+            returnfig=True,
+            figsize=(9, 4),
+            title=f"{symbol}  直近{len(df_chart)}日",
+            tight_layout=True,
+        )
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight", dpi=100)
+        buf.seek(0)
+        st.image(buf, use_container_width=True)
+        plt.close(fig)
+    except Exception as e:
+        st.caption(f"チャート生成失敗: {e}")
 
 
 # ─── スクリーニング実行（進捗バー付き）──────────────────────
-def run_screening_with_progress(symbols: list[str]) -> list[dict]:
+def run_screening_with_progress(symbols: list[str], force_refresh: bool = False) -> list[dict]:
     from data_fetcher import compute_indicators
 
-    results = []
-    total   = len(symbols)
+    results    = []
+    total      = len(symbols)
     done_count = [0]
-    lock = threading.Lock()
+    lock       = threading.Lock()
 
-    progress_bar  = st.progress(0, text=f"0 / {total} 銘柄チェック中...")
-    status_text   = st.empty()
+    progress_bar = st.progress(0, text=f"0 / {total} 銘柄チェック中...")
+    status_text  = st.empty()
 
     def process_one(sym):
-        df_raw = data_fetcher.fetch_ohlcv(sym)
+        # 改良③: fetch_ohlcv_cached を使用
+        df_raw = data_fetcher.fetch_ohlcv_cached(sym, force_refresh=force_refresh)
         if df_raw is None:
             return None
         df   = compute_indicators(df_raw)
@@ -262,11 +351,11 @@ def run_screening_with_progress(symbols: list[str]) -> list[dict]:
     return results[: config.MAX_CANDIDATES]
 
 
-# ─── 候補カード表示 ──────────────────────────────────────────
+# ─── 候補カード表示（改良①チャート追加）─────────────────────
 def render_candidate_card(rank: int, c: dict):
     plan = c["plan"]
 
-    score = c["score"]
+    score       = c["score"]
     score_color = "score-high" if score >= 80 else ("score-mid" if score >= 60 else "score-low")
 
     with st.expander(
@@ -296,10 +385,18 @@ def render_candidate_card(rank: int, c: dict):
         col4.metric(
             "📦 推奨株数",
             f"{plan['shares']:,}株",
-            help=f"総資金の{config.RISK_PERCENT}%以内の損失になるよう計算した株数です。これより多く買うとリスクが高くなります。"
+            help=f"総資金の{config.RISK_PERCENT}%以内の損失になるよう計算した株数です。"
         )
 
         st.markdown("---")
+
+        # ── ローソク足チャート（改良①）──────────────────────
+        with st.spinner("チャート読み込み中..."):
+            render_chart(c["symbol"])
+
+        st.markdown("---")
+
+        # ── テクニカル情報 + 資金計算 ────────────────────────
         col_a, col_b = st.columns(2)
 
         with col_a:
@@ -341,7 +438,7 @@ def render_candidate_card(rank: int, c: dict):
         col_btn, col_msg = st.columns([2, 3])
         with col_btn:
             if st.button(
-                f"📝 ポジションに追加する",
+                "📝 ポジションに追加する",
                 key=f"add_pos_{c['symbol']}_{rank}",
                 type="primary",
                 use_container_width=True,
@@ -384,7 +481,6 @@ def render_summary_table(candidates: list[dict]):
 
     df = pd.DataFrame(rows)
 
-    # スコアで色分け
     def color_score(val):
         if val >= 80: return "color: #00c853"
         if val >= 60: return "color: #ffab00"
@@ -396,7 +492,6 @@ def render_summary_table(candidates: list[dict]):
         hide_index=True,
     )
 
-    # CSVダウンロードボタン
     csv = df.to_csv(index=False, encoding="utf-8-sig")
     st.download_button(
         label="📥 CSVダウンロード",
@@ -415,15 +510,14 @@ def render_history_tab():
             st.info("履歴がまだありません")
             return
 
-        # 簡易統計
         entered = df[df["実際に入ったか"] == "はい"]
         wins    = entered[entered["勝負"] == "勝ち"]
         losses  = entered[entered["勝負"] == "負け"]
 
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("通知件数",   len(df))
+        c1.metric("通知件数",     len(df))
         c2.metric("実際に入った", len(entered))
-        c3.metric("勝ち / 負け", f"{len(wins)} / {len(losses)}")
+        c3.metric("勝ち / 負け",  f"{len(wins)} / {len(losses)}")
 
         win_rate = len(wins) / len(entered) * 100 if len(entered) > 0 else 0
         c4.metric("勝率", f"{win_rate:.1f}%")
@@ -444,6 +538,175 @@ def render_history_tab():
         st.info("履歴ファイルがまだありません。スクリーニングを実行すると自動生成されます。")
 
 
+# ─── 高配当株タブ（改良⑩）──────────────────────────────────
+def render_dividend_tab():
+    import dividend_manager as dm
+
+    st.subheader("💰 高配当株ポートフォリオ")
+    st.caption(
+        "配当収入を目的とした長期保有銘柄を管理します。"
+        "yfinanceの日本株配当データは精度が低い場合があるため、"
+        "取得できない場合は「データなし（手動確認推奨）」と表示します。"
+    )
+
+    # ── ポートフォリオ一覧（現在値自動取得）────────────────
+    with st.spinner("現在値取得中..."):
+        holdings = dm.get_portfolio_with_prices()
+
+    if holdings:
+        # 年間配当合計（大きく表示）
+        total_income  = sum(h["年間配当額"] or 0 for h in holdings)
+        total_cost    = sum(h["取得単価"] * h["保有数"] for h in holdings)
+        total_eval    = sum(h["評価額"]               for h in holdings)
+        total_unreal  = total_eval - total_cost
+
+        st.markdown(
+            f"<h2 style='text-align:center; color:#00c853;'>"
+            f"年間配当合計: {total_income:,.0f}円"
+            f"</h2>",
+            unsafe_allow_html=True,
+        )
+        c1, c2, c3 = st.columns(3)
+        c1.metric("総取得額",  f"{total_cost:,.0f}円")
+        c2.metric("総評価額",  f"{total_eval:,.0f}円")
+        c3.metric("総含み損益", f"{total_unreal:+,.0f}円",
+                  delta=f"{total_unreal/total_cost*100:+.1f}%" if total_cost > 0 else "")
+
+        st.markdown("---")
+        st.markdown("### 📌 保有銘柄一覧")
+
+        if st.button("🔄 現在値を更新", key="refresh_div"):
+            st.rerun()
+
+        for h in holdings:
+            pnl_color = "🟢" if h["含み損益"] >= 0 else "🔴"
+            with st.expander(
+                f"{h['状態']}  {h['銘柄コード']} {h['銘柄名']}  "
+                f"含み損益: {pnl_color} {h['含み損益']:+,.0f}円  "
+                f"（現在利回り: {h['現在利回り']:.2f}%）" if h["現在利回り"] else
+                f"{h['状態']}  {h['銘柄コード']} {h['銘柄名']}  "
+                f"含み損益: {pnl_color} {h['含み損益']:+,.0f}円",
+                expanded=False,
+            ):
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("取得単価",   f"{h['取得単価']:,.0f}円")
+                c2.metric("現在値",     f"{h['現在値']:,.0f}円",
+                          delta=f"{h['含み損益%']:+.1f}%")
+                c3.metric("現在利回り", f"{h['現在利回り']:.2f}%" if h["現在利回り"] else "データなし")
+                c4.metric("取得利回り", f"{h['取得利回り']:.2f}%" if h["取得利回り"] else "データなし")
+
+                st.markdown(
+                    f"**保有数**: {h['保有数']:,}株　"
+                    f"**評価額**: {h['評価額']:,.0f}円　"
+                    f"**年間配当**: {h['年間配当額']:,.0f}円" if h["年間配当額"] else
+                    f"**保有数**: {h['保有数']:,}株　"
+                    f"**評価額**: {h['評価額']:,.0f}円　"
+                    f"**年間配当**: データなし（手動確認推奨）"
+                )
+                st.caption(f"セクター: {h['セクター']}")
+
+                # ── 権利スケジュール ──────────────────────────
+                st.markdown("**📅 権利スケジュール**")
+                sched = dm.get_dividend_schedule(h["銘柄コード"])
+                s1, s2, s3 = st.columns(3)
+                s1.markdown(f"**権利付き最終日**: {sched['権利付き最終日']}")
+                s2.markdown(f"**権利落ち日**: {sched['権利落ち日']}")
+                s3.markdown(f"**権利確定日**: {sched['権利確定日']}")
+
+                cd = sched["カウントダウン"]
+                cd_status = sched["カウントダウン状態"]
+                if cd_status == "権利落ち済み":
+                    st.markdown("<span style='color:gray'>権利落ち済み</span>", unsafe_allow_html=True)
+                elif cd_status == "danger":
+                    st.markdown(f"<span style='color:red'>⚠️ 権利付き最終日まで残り **{cd}日**</span>", unsafe_allow_html=True)
+                elif cd_status == "warning":
+                    st.markdown(f"<span style='color:orange'>📆 権利付き最終日まで残り **{cd}日**</span>", unsafe_allow_html=True)
+                elif cd_status == "ok":
+                    st.markdown(f"📆 権利付き最終日まで残り **{cd}日**")
+
+                # ── 財務健全性チェック ────────────────────────
+                with st.expander("📊 財務健全性・配当トレンド"):
+                    health = dm.get_financial_health(h["銘柄コード"])
+
+                    # 配当性向
+                    pr = health["payout_ratio"]
+                    if pr is None:
+                        st.markdown("**配当性向**: データなし（手動確認推奨）")
+                    elif pr > 100:
+                        st.markdown(f"**配当性向**: 🔴 {pr:.1f}%（要注意：減配リスク）")
+                    elif pr > 70:
+                        st.markdown(f"**配当性向**: ⚠️ {pr:.1f}%（高め）")
+                    else:
+                        st.markdown(f"**配当性向**: ✅ {pr:.1f}%")
+
+                    # 自己資本比率
+                    er = health["equity_ratio"]
+                    if er is None:
+                        st.markdown("**自己資本比率**: データなし")
+                    elif er < 30:
+                        st.markdown(f"**自己資本比率**: ⚠️ {er:.1f}%（低め）")
+                    else:
+                        st.markdown(f"**自己資本比率**: ✅ {er:.1f}%")
+
+                    # 配当トレンド
+                    dt_status = health["div_trend_status"]
+                    dt_text   = health["div_trend"]
+                    if dt_status == "good":
+                        st.markdown(f"**配当トレンド**: ✅ {dt_text}")
+                    elif dt_status == "warning":
+                        st.markdown(f"**配当トレンド**: ⚠️ {dt_text}")
+                    else:
+                        st.markdown(f"**配当トレンド**: {dt_text}")
+
+                # ── 権利落ち後分析 ────────────────────────────
+                with st.expander("📉 権利落ち後の過去分析"):
+                    analysis = dm.get_historical_analysis(h["銘柄コード"])
+                    if "error" in analysis:
+                        st.caption(f"データなし（手動確認推奨）: {analysis['error']}")
+                    else:
+                        if analysis.get("latest_div"):
+                            st.markdown(f"**理論権利落ち下落額（税引前）**: {analysis['latest_div']:.2f}円/株")
+                        if analysis.get("avg_recovery_days") is not None:
+                            st.markdown(f"**平均回復日数**: {analysis['avg_recovery_days']}日")
+                        else:
+                            st.markdown("**平均回復日数**: データ不足")
+
+                        records = analysis.get("records", [])
+                        if records:
+                            df_rec = pd.DataFrame(records)
+                            st.dataframe(df_rec, use_container_width=True, hide_index=True)
+
+                # ── 削除ボタン ────────────────────────────────
+                if st.button(f"🗑 {h['銘柄名']}を削除", key=f"del_div_{h['id']}"):
+                    dm.remove_stock(h["id"])
+                    st.success(f"{h['銘柄名']}を削除しました")
+                    st.rerun()
+    else:
+        st.info("高配当株がまだ登録されていません。下のフォームから追加してください。")
+
+    st.markdown("---")
+
+    # ── 新規銘柄追加フォーム ────────────────────────────────
+    st.markdown("### ➕ 保有銘柄を追加")
+    with st.form("add_dividend_stock"):
+        col_a, col_b, col_c = st.columns(3)
+        new_sym  = col_a.text_input("銘柄コード（例: 9434）")
+        new_name = col_b.text_input("銘柄名（例: ソフトバンク）")
+        new_sect = col_c.selectbox("セクター", ["ディフェンシブ", "景気敏感", "その他"])
+
+        col_d, col_e = st.columns(2)
+        new_shares = col_d.number_input("保有数（株）", min_value=1, step=1, value=100)
+        new_cost   = col_e.number_input("取得単価（円）", min_value=1.0, step=1.0, value=1000.0)
+
+        if st.form_submit_button("📝 追加する", type="primary"):
+            if not new_sym or not new_name or new_cost <= 0:
+                st.error("銘柄コード・銘柄名・取得単価を入力してください")
+            else:
+                dm.add_stock(new_sym, new_name, int(new_shares), new_cost, new_sect)
+                st.success(f"✅ {new_name} を追加しました")
+                st.rerun()
+
+
 # ─── メイン ──────────────────────────────────────────────────
 def main():
     st.title("📈 株式スクリーニングツール")
@@ -459,18 +722,23 @@ def main():
     cfg = render_sidebar()
     apply_settings(cfg)
 
-    # タブ
-    tab_screen, tab_portfolio, tab_backtest, tab_history, tab_help = st.tabs([
-        "🔍 スクリーニング", "💼 ポートフォリオ", "📊 バックテスト", "📚 履歴", "❓ 使い方"
+    # タブ（改良⑩で高配当株タブを追加）
+    tab_screen, tab_portfolio, tab_backtest, tab_history, tab_dividend, tab_help = st.tabs([
+        "🔍 スクリーニング", "💼 ポートフォリオ", "📊 バックテスト",
+        "📚 履歴", "💰 高配当株", "❓ 使い方"
     ])
 
     # ─── セッション状態の初期化 ──────────────────────────
-    if "candidates" not in st.session_state:
-        st.session_state["candidates"] = []
-    if "screen_date" not in st.session_state:
-        st.session_state["screen_date"] = ""
-    if "market_status" not in st.session_state:
-        st.session_state["market_status"] = None
+    if "candidates"     not in st.session_state:
+        st.session_state["candidates"]     = []
+    if "screen_date"    not in st.session_state:
+        st.session_state["screen_date"]    = ""
+    if "market_status"  not in st.session_state:
+        st.session_state["market_status"]  = None
+    if "force_refresh"  not in st.session_state:
+        st.session_state["force_refresh"]  = False
+    if "ad_ratio"       not in st.session_state:
+        st.session_state["ad_ratio"]       = None
 
     # ─── スクリーニングタブ ──────────────────────────────
     with tab_screen:
@@ -492,29 +760,80 @@ def main():
                 "※ 下落相場では良い銘柄でも値下がりしやすいため、エントリーを控えるのが無難です。"
             )
 
+        # ── 騰落レシオ表示（改良④）──────────────────────
+        if st.session_state["ad_ratio"] is not None:
+            adr = st.session_state["ad_ratio"]
+            if adr >= 120:
+                st.markdown(
+                    f"<span style='color:orange'>🌡️ 騰落レシオ: <b>{adr}</b>　過熱注意</span>",
+                    unsafe_allow_html=True,
+                )
+            elif adr <= 75:
+                st.markdown(
+                    f"<span style='color:#1976d2'>🌡️ 騰落レシオ: <b>{adr}</b>　売られすぎ</span>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    f"<span style='color:gray'>🌡️ 騰落レシオ: <b>{adr}</b>　中立</span>",
+                    unsafe_allow_html=True,
+                )
+            # 上昇トレンドかつ過熱のときは追加警告
+            if mkt["ok"] and adr >= 120:
+                st.warning("地合いは上昇中ですが過熱感があります。慎重にエントリーしてください。")
+
         st.markdown(f"""
 **対象市場**: {cfg['market']}
 **総資金**: {cfg['capital']:,}円
 **1回の最大損失**: {cfg['capital'] * cfg['risk'] / 100:,.0f}円
 """)
 
-        col_run, col_clear = st.columns([3, 1])
+        # ── 実行ボタン（通常 + キャッシュ更新）──────────────
+        col_run, col_refresh, col_clear = st.columns([3, 2, 1])
         with col_run:
             run_button = st.button("▶ スクリーニング実行", type="primary", use_container_width=True)
+        with col_refresh:
+            refresh_button = st.button(
+                "🔄 キャッシュ更新して実行",
+                use_container_width=True,
+                help="保存済みキャッシュを無視して全銘柄のデータを最新取得します。時間がかかります。"
+            )
         with col_clear:
-            if st.button("🗑 結果をクリア", use_container_width=True):
-                st.session_state["candidates"] = []
-                st.session_state["screen_date"] = ""
+            if st.button("🗑 クリア", use_container_width=True):
+                st.session_state["candidates"]    = []
+                st.session_state["screen_date"]   = ""
                 st.session_state["market_status"] = None
+                st.session_state["force_refresh"] = False
+                st.session_state["ad_ratio"]      = None
                 st.rerun()
 
         st.caption("引け後（15:30以降）に実行するのが最適です。")
 
-        if run_button:
+        # キャッシュ更新ボタン → force_refresh を立てて通常実行に合流
+        force_refresh = False
+        if refresh_button:
+            st.session_state["force_refresh"] = True
+            force_refresh = True
+
+        do_run = run_button or refresh_button
+
+        if do_run:
+            # 設定を保存（改良⑥）
+            save_settings(cfg)
+
             symbols = data_fetcher.load_watchlist()
             st.markdown(f"**対象銘柄数: {len(symbols)}銘柄**")
 
-            raw_results = run_screening_with_progress(symbols)
+            raw_results = run_screening_with_progress(
+                symbols,
+                force_refresh=st.session_state.get("force_refresh", False)
+            )
+            st.session_state["force_refresh"] = False   # リセット
+
+            # 騰落レシオを計算（改良④）
+            with st.spinner("騰落レシオ計算中..."):
+                from market_filter import get_advance_decline_ratio
+                st.session_state["ad_ratio"] = get_advance_decline_ratio(symbols)
 
             if not raw_results:
                 st.warning(
@@ -525,7 +844,6 @@ def main():
                     "- スクリーニング条件が厳しすぎる（左サイドバーで調整）"
                 )
             else:
-                # トレードプランを計算してセッションに保存
                 candidates = []
                 for r in raw_results:
                     r["plan"] = calculator.build_trade_plan(r)
@@ -535,15 +853,14 @@ def main():
                 st.session_state["candidates"]  = candidates
                 st.session_state["screen_date"] = run_date
 
-                # 履歴保存
                 history_module.save_history(candidates, run_date)
+                st.rerun()
 
         # ── 結果表示（セッションから読み込む）──────────────
         candidates = st.session_state["candidates"]
         run_date   = st.session_state["screen_date"]
 
         if candidates:
-            # 結果表示
             st.success(f"✅ {len(candidates)}銘柄が条件を通過しました")
             st.markdown("---")
 
@@ -562,18 +879,15 @@ def main():
         st.subheader("💼 ポートフォリオ（リアルタイム損益）")
         st.caption("実際にエントリーしたポジションを記録して損益をリアルタイム表示します。")
 
-        # ── サマリー ─────────────────────────────────────
         summary = pf_module.get_summary()
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("総トレード数", f"{summary['total']}件")
-        c2.metric("保有中", f"{summary['open']}件")
-        c3.metric("決済済み", f"{summary['closed']}件")
-        c4.metric("確定損益", f"{summary['realized_pnl']:+,.0f}円")
-        c5.metric("勝/負", f"{summary['win']}勝 {summary['lose']}敗")
+        c2.metric("保有中",       f"{summary['open']}件")
+        c3.metric("決済済み",     f"{summary['closed']}件")
+        c4.metric("確定損益",     f"{summary['realized_pnl']:+,.0f}円")
+        c5.metric("勝/負",        f"{summary['win']}勝 {summary['lose']}敗")
 
         st.markdown("---")
-
-        # ── オープンポジション ────────────────────────────
         st.markdown("### 📌 保有中ポジション（現在値自動更新）")
 
         if st.button("🔄 現在値を更新", key="refresh_pf"):
@@ -609,7 +923,6 @@ def main():
                     if pos["メモ"]:
                         st.caption(f"メモ: {pos['メモ']}")
 
-                    # 決済ボタン
                     with st.form(key=f"close_{pos['id']}"):
                         st.markdown("**決済する**")
                         exit_col1, exit_col2, exit_col3 = st.columns(3)
@@ -631,8 +944,6 @@ def main():
                             st.rerun()
 
         st.markdown("---")
-
-        # ── 新規ポジション追加フォーム ────────────────────
         st.markdown("### ➕ 新規ポジションを追加")
         with st.form("add_position"):
             col_a, col_b, col_c = st.columns(3)
@@ -659,7 +970,7 @@ def main():
 
             if new_entry > 0:
                 loss_per_share = new_entry - new_stop
-                max_loss = loss_per_share * new_shares
+                max_loss       = loss_per_share * new_shares
                 st.caption(
                     f"最大損失: {max_loss:,.0f}円　"
                     f"（損失率: {max_loss / config.TOTAL_CAPITAL * 100:.1f}%）"
@@ -679,10 +990,9 @@ def main():
                     st.success(f"✅ {new_name} を追加しました")
                     st.rerun()
 
-        # ── 決済済みポジション ────────────────────────────
         st.markdown("---")
         st.markdown("### 📋 決済済みポジション")
-        df_all = pf_module.load_positions()
+        df_all    = pf_module.load_positions()
         closed_df = df_all[df_all["ステータス"] == "closed"]
         if closed_df.empty:
             st.info("決済済みのポジションはまだありません。")
@@ -717,14 +1027,14 @@ def main():
         with col_n:
             bt_top   = st.slider("対象銘柄数（watchlist上位）", 20, 200, 50, step=10)
 
-        st.info(f"⏱ 銘柄数×期間に応じて数分〜数十分かかります。実行中はタブを切り替えないでください。")
+        st.info("⏱ 銘柄数×期間に応じて数分〜数十分かかります。実行中はタブを切り替えないでください。")
         bt_button = st.button("▶ バックテスト実行", type="secondary", use_container_width=True)
 
         if bt_button:
             from backtest import run_backtest, print_summary
             from market_filter import fetch_market_data_range
 
-            symbols = data_fetcher.load_watchlist()[:bt_top]
+            symbols   = data_fetcher.load_watchlist()[:bt_top]
             start_str = bt_start.strftime("%Y-%m-%d")
             end_str   = bt_end.strftime("%Y-%m-%d")
 
@@ -734,33 +1044,33 @@ def main():
             if trades_df.empty:
                 st.warning("期間内にトレードがありませんでした。条件を変えて再実行してください。")
             else:
-                total   = len(trades_df)
-                wins    = (trades_df["損益合計"] > 0).sum()
-                losses  = (trades_df["損益合計"] <= 0).sum()
+                total    = len(trades_df)
+                wins     = (trades_df["損益合計"] > 0).sum()
+                losses   = (trades_df["損益合計"] <= 0).sum()
                 win_rate = wins / total * 100
                 total_pnl = trades_df["損益合計"].sum()
                 init_cap  = config.TOTAL_CAPITAL
                 ret_pct   = total_pnl / init_cap * 100
                 avg_win   = trades_df[trades_df["損益合計"] > 0]["損益合計"].mean() if wins > 0 else 0
                 avg_loss  = trades_df[trades_df["損益合計"] <= 0]["損益合計"].mean() if losses > 0 else 0
-                pf = abs(trades_df[trades_df["損益合計"] > 0]["損益合計"].sum() /
-                         trades_df[trades_df["損益合計"] <= 0]["損益合計"].sum()) if losses > 0 else 999
+                pf = abs(
+                    trades_df[trades_df["損益合計"] > 0]["損益合計"].sum() /
+                    trades_df[trades_df["損益合計"] <= 0]["損益合計"].sum()
+                ) if losses > 0 else 999
 
-                # ── サマリー指標 ──────────────────────────────
                 st.markdown("### 📋 結果サマリー")
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("総トレード数", f"{total}件")
-                c2.metric("勝率", f"{win_rate:.1f}%")
+                c2.metric("勝率",         f"{win_rate:.1f}%")
                 c3.metric("プロフィットF", f"{pf:.2f}")
-                c4.metric("総損益", f"{total_pnl:+,.0f}円", delta=f"{ret_pct:+.1f}%")
+                c4.metric("総損益",       f"{total_pnl:+,.0f}円", delta=f"{ret_pct:+.1f}%")
 
                 c5, c6, c7, c8 = st.columns(4)
-                c5.metric("初期資金", f"{init_cap:,.0f}円")
-                c6.metric("最終資金", f"{init_cap + total_pnl:,.0f}円")
-                c7.metric("平均利益", f"+{avg_win:,.0f}円")
-                c8.metric("平均損失", f"{avg_loss:,.0f}円")
+                c5.metric("初期資金",   f"{init_cap:,.0f}円")
+                c6.metric("最終資金",   f"{init_cap + total_pnl:,.0f}円")
+                c7.metric("平均利益",   f"+{avg_win:,.0f}円")
+                c8.metric("平均損失",   f"{avg_loss:,.0f}円")
 
-                # ── 決済理由 ──────────────────────────────────
                 st.markdown("### 🔖 決済理由の内訳")
                 reason_df = trades_df.groupby("決済理由").agg(
                     件数=("損益合計", "count"),
@@ -771,18 +1081,15 @@ def main():
                 reason_df["合計損益"] = reason_df["合計損益"].map(lambda x: f"{x:+,.0f}円")
                 st.dataframe(reason_df, use_container_width=True, hide_index=True)
 
-                # ── 銘柄別損益 ────────────────────────────────
                 st.markdown("### 🏆 銘柄別損益ランキング")
                 sym_df = (
                     trades_df.groupby(["銘柄コード", "銘柄名"])["損益合計"]
-                    .sum()
-                    .reset_index()
+                    .sum().reset_index()
                     .sort_values("損益合計", ascending=False)
                 )
                 sym_df["損益合計"] = sym_df["損益合計"].map(lambda x: f"{x:+,.0f}円")
                 st.dataframe(sym_df.head(15), use_container_width=True, hide_index=True)
 
-                # ── トレード一覧 ──────────────────────────────
                 st.markdown("### 📄 全トレード一覧")
                 display = trades_df[[
                     "エントリー日", "銘柄コード", "銘柄名",
@@ -802,7 +1109,6 @@ def main():
                     use_container_width=True, hide_index=True
                 )
 
-                # ── CSVダウンロード ───────────────────────────
                 csv = trades_df.to_csv(index=False, encoding="utf-8-sig")
                 st.download_button(
                     "📥 バックテスト結果をCSVダウンロード",
@@ -810,12 +1116,15 @@ def main():
                     f"backtest_{start_str}_{end_str}.csv",
                     "text/csv"
                 )
-
                 st.warning("⚠️ バックテストは過去データによる参考値です。将来の利益を保証するものではありません。")
 
     # ─── 履歴タブ ────────────────────────────────────────
     with tab_history:
         render_history_tab()
+
+    # ─── 高配当株タブ ────────────────────────────────────
+    with tab_dividend:
+        render_dividend_tab()
 
     # ─── 使い方タブ ─────────────────────────────────────
     with tab_help:
@@ -861,9 +1170,18 @@ def main():
 実際に買った銘柄を記録すると：
 - 現在の損益をリアルタイムで確認できる
 - いくら損切り・利確まであるかが一目でわかる
-- 決済後の記録が自動で残る
+- 決済後の記録が自動で history.csv に書き込まれる
 
 **手順**: スクリーニング結果 →「📝 ポジションに追加する」ボタン → 💼ポートフォリオタブで確認
+
+---
+
+### 💰 高配当株タブの使い方
+
+長期保有を目的とした配当目当ての銘柄を管理できます：
+- 年間配当合計が一目でわかる
+- 配当性向・自己資本比率で減配リスクをチェック
+- 権利落ち日のカウントダウンを表示
 
 ---
 
@@ -872,13 +1190,14 @@ def main():
 | 用語 | 意味 |
 |---|---|
 | **スクリーニング** | 大量の株の中から条件に合う銘柄だけを絞り込むこと |
-| **損切り（ロスカット）** | 損失が一定以上になったら売って損失を確定すること。これをしないと大損につながる |
+| **損切り（ロスカット）** | 損失が一定以上になったら売って損失を確定すること |
 | **利確（利益確定）** | 値上がりしたところで売って利益を受け取ること |
-| **出来高** | その日に売買された株の数。多いほど注目されている |
-| **MA25（25日移動平均線）** | 過去25日間の株価の平均。これより上にいると上昇トレンドの目安 |
-| **地合い** | 相場全体の雰囲気。地合いが悪いと良い銘柄でも下がりやすい |
-| **エントリー** | 株を買うこと |
-| **ポジション** | 現在保有している株のこと |
+| **出来高** | その日に売買された株の数 |
+| **売買代金** | 終値 × 出来高。1億円以上が流動性の目安 |
+| **MA25（25日移動平均線）** | 過去25日間の株価の平均 |
+| **騰落レシオ** | 値上がり銘柄 ÷ 値下がり銘柄 × 100。120超で過熱、75以下で売られすぎ |
+| **地合い** | 相場全体の雰囲気 |
+| **かぶミニ®** | 楽天証券の1株単位取引サービス。ミニ株設定で対応可能 |
 
 ---
 

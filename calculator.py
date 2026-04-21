@@ -93,12 +93,16 @@ def calc_position_size(entry: float, stop: float) -> dict:
             "note"            : "損切り価格がエントリー以上のため計算不能",
         }
 
+    lot = config.LOT_SIZE  # 注文単位（改良⑨）: 通常100株 / ミニ株1株
     raw_shares     = max_loss_amount / loss_per_share
-    rounded_shares = int(raw_shares // 100) * 100   # 100株単位
+    rounded_shares = int(raw_shares // lot) * lot   # lot 単位に切り捨て
 
-    # 最低1単元（100株）確保できない場合でも参考として10株単位も出す
+    # lot 単位に満たない場合は最低 lot 株を確保（ミニ株なら1株単位）
     if rounded_shares == 0:
-        rounded_shares = max(int(raw_shares // 10) * 10, 1)
+        if lot == 1:
+            rounded_shares = max(1, int(raw_shares))
+        else:
+            rounded_shares = max(int(raw_shares // 10) * 10, 1)
 
     investment = rounded_shares * entry
 
