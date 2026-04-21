@@ -132,20 +132,36 @@ def send_discord(candidates: list[dict], run_date: str = None) -> bool:
 
     run_date = run_date or date.today().strftime("%Y-%m-%d")
     lines = [
-        f"**【株式スクリーニング結果】{run_date}**",
-        f"総資金: {config.TOTAL_CAPITAL:,}円 | 候補数: {len(candidates)}銘柄",
-        "─" * 30,
+        f"📈 **株式スクリーニング結果　{run_date}**",
+        f"🎯 候補: {len(candidates)}銘柄",
+        "━" * 28,
     ]
 
     for rank, c in enumerate(candidates, 1):
-        plan = c["plan"]
-        warn_str = "  ⚠ " + " / ".join(c["warnings"]) if c["warnings"] else ""
+        plan  = c["plan"]
+        medal = ["🥇", "🥈", "🥉"][rank - 1] if rank <= 3 else f"#{rank}"
+        high  = "✅ あり" if c["new_high_5d"] else "❌ なし"
+
+        # 選出理由
+        reasons_str = "\n".join(f"  ・{r}" for r in c["reasons"])
+
+        # 注意点
+        warn_lines = ""
+        if c["warnings"]:
+            warn_lines = "\n⚠️ **注意点**\n" + "\n".join(f"  ・{w}" for w in c["warnings"])
+
         lines.append(
-            f"**{rank}. {c['symbol']} {c['name']}** スコア:{c['score']}\n"
-            f"  現在値:{c['close']:,.0f}円 → エントリー:{plan['entry']:,.0f} | 損切:{plan['stop']:,.0f} | 利確:{plan['tp_fixed']:,.0f}\n"
-            f"  {plan['shares']:,}株 ({plan['investment']:,.0f}円投資) 最大損失:{plan['max_loss']:,.0f}円\n"
-            f"  理由: {' / '.join(c['reasons'][:2])}"
-            + (f"\n{warn_str}" if warn_str else "")
+            f"\n{medal} **{c['symbol']}:{c['name']}**　スコア: {c['score']}点\n"
+            f"\n📊 **テクニカル**\n"
+            f"  現在値: {c['close']:,.0f}円（MA25比 +{c['pct_vs_ma25']:.1f}%）\n"
+            f"  出来高: {c['vol_ratio']:.1f}倍（20日平均比）｜高値更新: {high}\n"
+            f"\n💹 **トレードプラン**\n"
+            f"  🎯 エントリー : {plan['entry']:,.0f}円\n"
+            f"  🛑 損切り     : {plan['stop']:,.0f}円（-{config.STOP_LOSS_PERCENT}%）\n"
+            f"  ✅ 利確目標   : {plan['tp_fixed']:,.0f}円（+{config.TAKE_PROFIT_PERCENT}%）\n"
+            f"\n✅ **選出理由**\n{reasons_str}"
+            + warn_lines
+            + f"\n{'━' * 28}"
         )
 
     message = "\n".join(lines)
