@@ -1,0 +1,35 @@
+name: 株式スクリーニング 自動実行
+
+on:
+  schedule:
+    # 平日（月〜金）15:35 JST に実行
+    # GitHub Actions の時刻は UTC なので JST-9 = 06:35 UTC
+    - cron: '35 6 * * 1-5'
+
+  # 手動実行ボタン（テスト用）
+  workflow_dispatch:
+
+jobs:
+  screening:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: リポジトリをチェックアウト
+        uses: actions/checkout@v4
+
+      - name: Python 3.11 をセットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: パッケージをインストール
+        run: pip install -r requirements.txt
+
+      - name: データディレクトリを作成
+        run: mkdir -p data/output data/cache
+
+      - name: スクリーニングを実行
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python main.py --no-save
