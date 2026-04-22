@@ -131,8 +131,17 @@ def send_discord(candidates: list[dict], run_date: str = None) -> bool:
         return False
 
     run_date = run_date or date.today().strftime("%Y-%m-%d")
+
+    # 日付を「4月22日（火）」形式に変換
+    weekdays = ["月", "火", "水", "木", "金", "土", "日"]
+    dt = datetime.strptime(run_date, "%Y-%m-%d")
+    date_jp = f"{dt.month}月{dt.day}日（{weekdays[dt.weekday()]}）"
+
     lines = [
-        f"📈 **株式スクリーニング結果　{run_date}**",
+        f"━" * 28,
+        f"📅  **{date_jp}　引け後スクリーニング**",
+        f"━" * 28,
+        f"📈 **株式スクリーニング結果**",
         f"🎯 候補: {len(candidates)}銘柄",
         "━" * 28,
     ]
